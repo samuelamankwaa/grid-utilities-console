@@ -2,17 +2,18 @@ import React, { useState, useRef, useEffect } from 'react';
 import { useSelector, useDispatch } from 'react-redux';
 import { RootState, AppDispatch } from '../store/store';
 import { logout, clearUiPreviewRole, UserRole } from '../store/authSlice';
-import { LayoutGrid, UploadCloud, Settings, LogOut, ChevronDown, Clock, BarChart3, Eye, X } from 'lucide-react';
+import { LayoutGrid, UploadCloud, Settings, LogOut, ChevronDown, Clock, BarChart3, Eye, X, UserCog } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 
 interface HeaderProps {
   activeTab: 'dashboard' | 'timesheet';
   onTabChange: (tab: 'dashboard' | 'timesheet') => void;
   onOpenUpload: () => void;
+  onOpenPosition: () => void;
   onOpenSettings: () => void;
 }
 
-export const Header: React.FC<HeaderProps> = ({ activeTab, onTabChange, onOpenUpload, onOpenSettings }) => {
+export const Header: React.FC<HeaderProps> = ({ activeTab, onTabChange, onOpenUpload, onOpenPosition, onOpenSettings }) => {
   const dispatch = useDispatch<AppDispatch>();
   const { workOrders, invoices } = useSelector((state: RootState) => state.db);
   const { currentUser, previewRole } = useSelector((state: RootState) => state.auth);
@@ -132,6 +133,16 @@ export const Header: React.FC<HeaderProps> = ({ activeTab, onTabChange, onOpenUp
 
         {/* Action Buttons & User Menu */}
         <div className="flex items-center gap-3 w-full md:w-auto justify-between md:justify-end">
+          {!isEmployee && (
+            <button
+              onClick={onOpenPosition}
+              className="flex items-center gap-2 px-3.5 py-2 bg-slate-800 hover:bg-slate-700 active:bg-slate-850 text-slate-200 hover:text-white text-xs font-semibold rounded-xl border border-slate-700 shadow-sm transition-all duration-200 cursor-pointer"
+            >
+              <UserCog className="w-4 h-4 text-amber-400" />
+              <span className="hidden sm:inline">Add Position</span>
+              <span className="sm:hidden">Position</span>
+            </button>
+          )}
           {!isEmployee && (
             <button
               onClick={onOpenUpload}

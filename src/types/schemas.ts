@@ -177,7 +177,20 @@ export const LaborEntrySchema = z.object({
   created_at: z.string().optional(),
 });
 
+// Row of public.employee_position_overrides: an explicit role + hourly rate for one employee.
+export const EmployeePositionOverrideSchema = z.object({
+  id: z.string().optional(),
+  employee_key: z.string().min(1),
+  employee_name: z.string().min(1),
+  role_category: z.string().min(1),
+  hourly_rate: z.coerce.number().positive(),
+  created_at: z.string().optional(),
+  updated_at: z.string().optional(),
+  updated_by: z.string().nullable().optional(),
+});
+
 export type WorkOrder = z.infer<typeof WorkOrderSchema>;
+export type EmployeePositionOverride = z.infer<typeof EmployeePositionOverrideSchema>;
 export type Invoice = z.infer<typeof InvoiceSchema>;
 export type ExpenseOverride = z.infer<typeof ExpenseOverrideSchema>;
 export type LaborRateCategory = z.infer<typeof LaborRateCategorySchema>;

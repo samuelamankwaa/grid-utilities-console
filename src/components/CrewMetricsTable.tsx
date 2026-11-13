@@ -27,16 +27,27 @@ export const CrewMetricsTable: React.FC = () => {
 
     const bookedDatesMap: Record<string, Set<string>> = {};
     const revenueMap: Record<string, number> = {};
-    
+    const foremanGf: Record<string, string> = {};
+
+    const ensureNodes = (gf: string, f: string) => {
+      if (!GFData[gf]) {
+        GFData[gf] = { name: gf, type: 'GF', wos: 0, complete: 0, days: 0, revenue: 0, expense: 0, margin: 0, cycle: 28, onTime: 33, discipline: 78, expired: 12, doneVal: 18000, realization: 74, renbill: 8, unbilled: 0, kmJob: 9.2, prereqs: 3.2, areas: 4 };
+      }
+      if (!FData[f]) {
+        FData[f] = { name: f, gf, type: 'Foreman', wos: 0, complete: 0, days: 0, revenue: 0, expense: 0, margin: 0, cycle: 31, onTime: 28, discipline: 82, expired: 15, doneVal: 17000, realization: 76, renbill: 10, unbilled: 0, kmJob: 8.8, prereqs: 3.1, areas: 3 };
+      }
+    };
+
     const woMap = new Map<string, any>();
     workOrders.forEach((w) => {
       if (w.work_order_number) woMap.set(String(w.work_order_number).trim(), w);
     });
 
+    // Invoices are date-filtered by their own created date (not the work order's completion date).
     invoices.forEach(inv => {
       if (filters.status !== 'All statuses' && inv.status !== filters.status) return;
       if (filters.workOrderNumbers && filters.workOrderNumbers.length > 0 && !filters.workOrderNumbers.includes(inv.work_order_number || '')) return;
-      
+
       const invDate = getInvoiceDate(inv);
       if (invDate) {
         if (filters.startDate && invDate < filters.startDate) return;
@@ -49,6 +60,7 @@ export const CrewMetricsTable: React.FC = () => {
       if (wo) {
         const f = wo.foreman;
         if (f) {
+          foremanGf[f] = wo.general_foreman;
           if (!bookedDatesMap[f]) bookedDatesMap[f] = new Set();
           if (invDate) {
             bookedDatesMap[f].add(invDate);
@@ -74,12 +86,7 @@ export const CrewMetricsTable: React.FC = () => {
       const gf = wo.general_foreman;
       const f = wo.foreman;
 
-      if (!GFData[gf]) {
-        GFData[gf] = { name: gf, type: 'GF', wos: 0, complete: 0, days: 0, revenue: 0, expense: 0, margin: 0, cycle: 28, onTime: 33, discipline: 78, expired: 12, doneVal: 18000, realization: 74, renbill: 8, unbilled: 0, kmJob: 9.2, prereqs: 3.2, areas: 4 };
-      }
-      if (!FData[f]) {
-        FData[f] = { name: f, gf, type: 'Foreman', wos: 0, complete: 0, days: 0, revenue: 0, expense: 0, margin: 0, cycle: 31, onTime: 28, discipline: 82, expired: 15, doneVal: 17000, realization: 76, renbill: 10, unbilled: 0, kmJob: 8.8, prereqs: 3.1, areas: 3 };
-      }
+      ensureNodes(gf, f);
 
       const gfNode = GFData[gf];
       const fNode = FData[f];
@@ -92,6 +99,10 @@ export const CrewMetricsTable: React.FC = () => {
         fNode.complete++;
       }
     });
+
+    // Crews with invoices in the date range still get a row (and their revenue) even when
+    // none of their work orders were completed in that range.
+    Object.keys(revenueMap).forEach((f) => ensureNodes(foremanGf[f], f));
 
     Object.keys(FData).forEach(f => {
       const node = FData[f];

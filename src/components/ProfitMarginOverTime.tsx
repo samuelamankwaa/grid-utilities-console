@@ -1,5 +1,5 @@
 import React, { useMemo } from 'react';
-import { getWorkOrderReportingDate, getInvoiceDate } from '../utils/helpers';
+import { getInvoiceDate } from '../utils/helpers';
 import { useSelector } from 'react-redux';
 import { RootState } from '../store/store';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ReferenceLine } from 'recharts';
@@ -32,16 +32,8 @@ export const ProfitMarginOverTime: React.FC = () => {
       if (filters.foreman.length > 0 && !filters.foreman.includes(w.foreman)) return false;
       if (filters.workOrderNumbers && filters.workOrderNumbers.length > 0 && !filters.workOrderNumbers.includes(w.work_order_number)) return false;
       if (filters.area !== 'All areas' && w.area !== filters.area) return false;
-      // Order date range filters
-      if (filters.startDate || filters.endDate) {
-        const dateVal = getWorkOrderReportingDate(w);
-        if (dateVal) {
-          if (filters.startDate && dateVal < filters.startDate) return false;
-          if (filters.endDate && dateVal > filters.endDate) return false;
-        } else {
-          return false;
-        }
-      }
+      // No work-order date filter here: this chart plots invoices, and invoices are
+      // date-filtered by their own created date via the chart's date window below.
       return true;
     });
     const woNumbers = new Set(woFiltered.map(w => w.work_order_number));

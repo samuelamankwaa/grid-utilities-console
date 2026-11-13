@@ -135,9 +135,9 @@ export const Filters: React.FC = () => {
       <div className="flex flex-col gap-1">
         <label
           className="text-[10px] font-bold uppercase tracking-wide text-slate-500"
-          title="Filters work orders by Fulcrum Completion Date for completed work (never Last Updated)"
+          title="Work orders: Fulcrum completion date (need date if not completed; never Last Updated). Invoices: Coupa created date. Timesheets: shift date."
         >
-          Reporting Date (Completion / Need)
+          Date Range (WO Completed · Invoice Created)
         </label>
         <div className="flex items-center gap-2">
           <input
