@@ -1,14 +1,28 @@
 import { createSlice, createAsyncThunk } from '@reduxjs/toolkit';
 import { supabase } from '../utils/supabaseClient';
-import { Invoice, LaborEntry, LaborRateCategory, WorkOrder } from '../types/schemas';
+import {
+  EmployeePositionOverride,
+  EmployeePositionOverrideSchema,
+  Invoice,
+  LaborEntry,
+  LaborRateCategory,
+  WorkOrder,
+} from '../types/schemas';
 import {
   runSyntheticJoin,
   deriveArea,
   DEFAULT_LABOR_RATE_CATEGORIES,
-  getLaborRoleBenefitsRate,
-  isWorkOrderCompleted,
+  withDerivedCompletionDate,
   formatWorkOrderForUpload,
+  normalizeDateForStorage,
 } from '../utils/helpers';
+import {
+  EmployeePositionMap,
+  MAX_EMPLOYEE_HOURLY_RATE,
+  normalizeEmployeeDisplayName,
+  normalizeEmployeeKey,
+  priceLaborEntry,
+} from '../utils/laborCost';
 
 export interface ReconciliationSummary {
   uploadedType: 'work_orders' | 'invoices' | 'timesheet' | 'master';
@@ -28,6 +42,18 @@ export interface DbState {
   dailyExpenseRate: number;
   reconciliationSummary: ReconciliationSummary | null;
   status: 'idle' | 'loading' | 'succeeded' | 'failed';
+  /** Employee position overrides keyed by normalized employee key (DB is the source of truth). */
+  employeePositions: EmployeePositionMap;
+  /** Set when overrides could not be loaded, so the UI can warn that costs may be wrong. */
+  employeePositionsLoadError: string | null;
+}
+
+export const EMPLOYEE_POSITIONS_TABLE = 'employee_position_overrides';
+
+export interface SaveEmployeePositionInput {
+  employeeName: string;
+  roleCategory: string;
+  hourlyRate: number;
 }
 
 const LOCAL_OVERRIDES_KEY = 'grid_utilities_overrides_v3';
@@ -65,29 +91,41 @@ const deduplicateByKey = <T>(items: T[], keyFn: (item: T) => string): T[] => {
   return Array.from(map.values());
 };
 
-// Fetch all rows from Supabase with automatic pagination (bypasses 1000-row limit)
-const fetchAllRows = async (table: string): Promise<any[]> => {
+// Fetch all rows from Supabase with automatic pagination (bypasses 1000-row limit).
+// Reports the first error instead of hiding it.
+const fetchAllRowsWithError = async (table: string): Promise<{ rows: any[]; error: string | null }> => {
   let allRows: any[] = [];
   let page = 0;
   const pageSize = 1000;
-  let hasMore = true;
 
-  while (hasMore) {
+  for (;;) {
     const from = page * pageSize;
     const to = from + pageSize - 1;
     const { data, error } = await supabase.from(table).select('*').range(from, to);
-    if (error || !data || data.length === 0) {
-      hasMore = false;
-    } else {
-      allRows = allRows.concat(data);
-      if (data.length < pageSize) {
-        hasMore = false;
-      } else {
-        page++;
-      }
-    }
+    if (error) return { rows: allRows, error: error.message };
+    if (!data || data.length === 0) break;
+    allRows = allRows.concat(data);
+    if (data.length < pageSize) break;
+    page++;
   }
-  return allRows;
+  return { rows: allRows, error: null };
+};
+
+// Legacy behaviour for existing tables: errors end paging silently.
+const fetchAllRows = async (table: string): Promise<any[]> => (await fetchAllRowsWithError(table)).rows;
+
+// Validate override rows from the DB and key them by normalized employee key.
+export const buildEmployeePositionMap = (rows: unknown[]): EmployeePositionMap => {
+  const map: EmployeePositionMap = {};
+  rows.forEach((row) => {
+    const parsed = EmployeePositionOverrideSchema.safeParse(row);
+    if (parsed.success) {
+      map[normalizeEmployeeKey(parsed.data.employee_name)] = parsed.data;
+    } else {
+      console.warn('Skipping invalid employee_position_overrides row:', row, parsed.error);
+    }
+  });
+  return map;
 };
 
 // Helper to generate compliant RFC4122 v4 UUIDs for PostgreSQL UUID columns
@@ -108,7 +146,8 @@ const isValidUUID = (id?: string | null): boolean => {
 };
 
 // Upsert items in safe batches of 500 to prevent payload limits
-const upsertInChunks = async (table: string, items: any[], onConflictKey?: string) => {
+// ignoreDuplicates: true inserts new rows only and leaves existing rows untouched (ON CONFLICT DO NOTHING)
+const upsertInChunks = async (table: string, items: any[], onConflictKey?: string, ignoreDuplicates = false) => {
   const chunkSize = 500;
   for (let i = 0; i < items.length; i += chunkSize) {
     const chunk = items.slice(i, i + chunkSize);
@@ -116,11 +155,40 @@ const upsertInChunks = async (table: string, items: any[], onConflictKey?: strin
     if (onConflictKey) {
       options.onConflict = onConflictKey;
     }
+    if (ignoreDuplicates) {
+      options.ignoreDuplicates = true;
+    }
     const { error } = await supabase.from(table).upsert(chunk, options);
     if (error) {
       console.error(`Supabase upsert error on table ${table}:`, error);
       throw new Error(`Failed to save to ${table}: ${error.message}`);
     }
+  }
+};
+
+// Saves work orders including the Fulcrum completion date.
+// Rows whose file has no completion date omit the column entirely, so a date already
+// stored in the database is not wiped by a later upload that lacks it.
+// If the live database predates the column, the rows are saved without it (with a warning)
+// rather than failing the whole upload; run migrations/2026-11-13_work_orders_date_work_completed.sql.
+const upsertWorkOrders = async (rows: WorkOrder[]) => {
+  const withDate = rows.filter((w) => w.date_work_completed);
+  const withoutDate = rows
+    .filter((w) => !w.date_work_completed)
+    .map(({ date_work_completed: _omit, ...rest }) => rest);
+
+  if (withoutDate.length > 0) await upsertInChunks('work_orders', withoutDate, 'work_order_number');
+  if (withDate.length === 0) return;
+  try {
+    await upsertInChunks('work_orders', withDate, 'work_order_number');
+  } catch (e) {
+    if (!(e instanceof Error) || !e.message.includes('date_work_completed')) throw e;
+    console.warn('work_orders.date_work_completed column is missing; saving without completion dates. Run the migration.', e);
+    await upsertInChunks(
+      'work_orders',
+      withDate.map(({ date_work_completed: _omit, ...rest }) => rest),
+      'work_order_number'
+    );
   }
 };
 
@@ -133,15 +201,18 @@ const initialState: DbState = {
   dailyExpenseRate: 5800,
   reconciliationSummary: null,
   status: 'idle',
+  employeePositions: {},
+  employeePositionsLoadError: null,
 };
 
 export const fetchDbState = createAsyncThunk('db/fetchDbState', async () => {
   try {
-    const [wos, invs, ovrs, labor] = await Promise.all([
+    const [wos, invs, ovrs, labor, positions] = await Promise.all([
       fetchAllRows('work_orders'),
       fetchAllRows('invoices'),
       fetchAllRows('expense_overrides'),
-      fetchAllRows('connecteam_labor_entries')
+      fetchAllRows('connecteam_labor_entries'),
+      fetchAllRowsWithError(EMPLOYEE_POSITIONS_TABLE),
     ]);
 
     const persistedOverrides = loadPersistedOverrides();
@@ -155,16 +226,15 @@ export const fetchDbState = createAsyncThunk('db/fetchDbState', async () => {
       };
     });
 
-    const parsedWorkOrders = (wos || []).map((w: any) => {
-      const isCompleted = isWorkOrderCompleted(w.status);
-      return {
+    const parsedWorkOrders = (wos || []).map((w: any) =>
+      withDerivedCompletionDate({
         ...w,
         locate_renewal_date: w.locate_renewal_date || null,
-        date_work_completed: w.date_work_completed || (isCompleted ? (w.customer_need_date || '2026-08-15') : null),
+        date_work_completed: w.date_work_completed || null,
         customer_need_date: w.customer_need_date || null,
         area: w.area || deriveArea(w.address || '', w.latitude, w.longitude),
-      };
-    });
+      })
+    );
 
     const parsedInvoices = runSyntheticJoin(
       invs || [],
@@ -183,6 +253,8 @@ export const fetchDbState = createAsyncThunk('db/fetchDbState', async () => {
       laborEntries: parsedLabor,
       laborRateCategories: DEFAULT_LABOR_RATE_CATEGORIES,
       overrides: ovrMap,
+      employeePositions: buildEmployeePositionMap(positions.rows),
+      employeePositionsLoadError: positions.error,
     };
   } catch (error) {
     console.error('Error in fetchDbState:', error);
@@ -192,8 +264,61 @@ export const fetchDbState = createAsyncThunk('db/fetchDbState', async () => {
       laborEntries: [],
       laborRateCategories: DEFAULT_LABOR_RATE_CATEGORIES,
       overrides: loadPersistedOverrides(),
+      employeePositions: {},
+      employeePositionsLoadError: error instanceof Error ? error.message : 'Failed to load employee positions',
     };
   }
+});
+
+/**
+ * Create or update one employee's position override. Upserts on employee_key, so saving
+ * an employee twice updates the existing row (never a duplicate). Redux is only updated
+ * from the row Supabase returns, so a failed write can never look like a success.
+ */
+export const saveEmployeePositionThunk = createAsyncThunk<
+  EmployeePositionOverride,
+  SaveEmployeePositionInput,
+  { state: { db: DbState; auth: { currentUser: { role: string } | null } }; rejectValue: string }
+>('db/saveEmployeePosition', async (input, { getState, rejectWithValue }) => {
+  const { db, auth } = getState();
+  const role = auth.currentUser?.role;
+  if (role !== 'Supervisor' && role !== 'Admin') {
+    return rejectWithValue('Only Supervisors and Admins can change employee positions.');
+  }
+
+  const employeeName = normalizeEmployeeDisplayName(input.employeeName);
+  const employeeKey = normalizeEmployeeKey(employeeName);
+  if (!employeeKey) return rejectWithValue('Select an employee.');
+
+  const validRoles = db.laborRateCategories.map((c) => c.category_name);
+  if (!validRoles.includes(input.roleCategory)) {
+    return rejectWithValue(`Unknown position "${input.roleCategory}".`);
+  }
+
+  const rate = Number(input.hourlyRate);
+  if (!Number.isFinite(rate) || rate <= 0 || rate > MAX_EMPLOYEE_HOURLY_RATE) {
+    return rejectWithValue(`Labor rate must be greater than $0 and at most $${MAX_EMPLOYEE_HOURLY_RATE}.`);
+  }
+
+  const { data, error } = await supabase
+    .from(EMPLOYEE_POSITIONS_TABLE)
+    .upsert(
+      {
+        employee_key: employeeKey,
+        employee_name: employeeName,
+        role_category: input.roleCategory,
+        hourly_rate: parseFloat(rate.toFixed(2)),
+      },
+      { onConflict: 'employee_key' }
+    )
+    .select()
+    .single();
+
+  if (error) return rejectWithValue(`Could not save position: ${error.message}`);
+
+  const parsed = EmployeePositionOverrideSchema.safeParse(data);
+  if (!parsed.success) return rejectWithValue('The database returned an unexpected response. The position was not applied.');
+  return parsed.data;
 });
 
 export const uploadWorkOrdersThunk = createAsyncThunk(
@@ -203,9 +328,8 @@ export const uploadWorkOrdersThunk = createAsyncThunk(
 
     try {
       const deduplicatedWos = deduplicateByKey(formatted, (w) => w.work_order_number);
-      const remotePayload = deduplicatedWos.map(({ date_work_completed, ...rest }) => rest);
-      await upsertInChunks('work_orders', remotePayload, 'work_order_number');
-      return deduplicatedWos;
+      await upsertWorkOrders(deduplicatedWos);
+      return deduplicatedWos.map(withDerivedCompletionDate);
     } catch (e: any) {
       console.warn('Supabase work orders upsert error:', e);
       throw e;
@@ -234,7 +358,7 @@ export const uploadInvoicesThunk = createAsyncThunk(
       status: inv.status || 'Unapproved',
       po_number: inv.po_number || '',
       total: typeof inv.total === 'number' ? inv.total : parseFloat(inv.total || '0'),
-      created_date: inv.created_date || null,
+      created_date: normalizeDateForStorage(inv.created_date),
       unanswered_comments: !!inv.unanswered_comments,
       dispute_reason: inv.dispute_reason || null,
     }));
@@ -242,7 +366,9 @@ export const uploadInvoicesThunk = createAsyncThunk(
     try {
       const deduplicatedInvoices = deduplicateByKey(formatted, (i) => i.invoice_number);
 
-      // Ensure referenced parent work orders exist in Supabase to satisfy foreign key constraints
+      // Create placeholder work orders only for numbers not yet in Supabase.
+      // ignoreDuplicates is essential: a normal upsert would overwrite the crew, address,
+      // area, and status of real work orders with these placeholder values.
       const referencedWos = Array.from(new Set(deduplicatedInvoices.map(i => i.work_order_number).filter(Boolean)));
       if (referencedWos.length > 0) {
         const stubs = referencedWos.map(woNum => ({
@@ -253,7 +379,7 @@ export const uploadInvoicesThunk = createAsyncThunk(
           address: 'Pending Location',
           area: 'HOUSTON'
         }));
-        await upsertInChunks('work_orders', stubs, 'work_order_number');
+        await upsertInChunks('work_orders', stubs, 'work_order_number', true);
       }
 
       await upsertInChunks('invoices', deduplicatedInvoices, 'invoice_number');
@@ -269,36 +395,23 @@ export const uploadTimesheetThunk = createAsyncThunk(
   'db/uploadTimesheet',
   async (entries: LaborEntry[]) => {
     const formatted = entries.map((e) => {
-      const otHours = e.ot_hours !== undefined && e.ot_hours !== null && !isNaN(Number(e.ot_hours))
-        ? Number(e.ot_hours)
-        : (e.shift_hours > 8 ? parseFloat((e.shift_hours - 8).toFixed(2)) : 0);
-      const otCost = e.ot_cost !== undefined && e.ot_cost !== null && !isNaN(Number(e.ot_cost)) && Number(e.ot_cost) > 0
-        ? Number(e.ot_cost)
-        : parseFloat((otHours * e.hourly_rate * 1.5).toFixed(2));
-
-      const dtHours = e.dt_hours !== undefined && e.dt_hours !== null && !isNaN(Number(e.dt_hours))
-        ? Number(e.dt_hours)
-        : 0;
-      const dtCost = e.dt_cost !== undefined && e.dt_cost !== null && !isNaN(Number(e.dt_cost)) && Number(e.dt_cost) > 0
-        ? Number(e.dt_cost)
-        : parseFloat((dtHours * e.hourly_rate * 2.0).toFixed(2));
-
-      const regularHours = Math.max(0, parseFloat((e.shift_hours - otHours - dtHours).toFixed(2)));
-      const regularCost = parseFloat((regularHours * e.hourly_rate).toFixed(2));
-
-      const roleBenefitsRate = e.benefits_rate !== undefined && e.benefits_rate !== null && !isNaN(Number(e.benefits_rate)) && Number(e.benefits_rate) > 0
-        ? Number(e.benefits_rate)
-        : getLaborRoleBenefitsRate(e.role_category, DEFAULT_LABOR_RATE_CATEGORIES);
-
-      const benefitsCost = e.benefits_cost !== undefined && e.benefits_cost !== null && !isNaN(Number(e.benefits_cost)) && Number(e.benefits_cost) > 0
-        ? Number(e.benefits_cost)
-        : parseFloat((e.shift_hours * roleBenefitsRate).toFixed(2));
-
-      const calculatedLaborCost = parseFloat((regularCost + otCost + dtCost + benefitsCost).toFixed(2));
-
-      const lineLaborCost = (e.line_labor_cost !== undefined && e.line_labor_cost !== null && !isNaN(Number(e.line_labor_cost)) && Number(e.line_labor_cost) > 0)
-        ? Number(e.line_labor_cost)
-        : calculatedLaborCost;
+      // Persist SOURCE values only: the uploaded hourly rate and the automatically
+      // classified role. Employee position overrides are deliberately not baked into the
+      // stored row; they are applied at calculation time (utils/laborCost.ts), so a later
+      // change to an employee's assignment re-prices these rows without rewriting them.
+      const source = priceLaborEntry(e, {
+        role: e.role_category,
+        hourlyRate: Number(e.hourly_rate) || 0,
+        categories: DEFAULT_LABOR_RATE_CATEGORIES,
+        trustStoredCosts: true,
+      });
+      const otHours = source.otHours;
+      const otCost = source.otCost;
+      const dtHours = source.dtHours;
+      const dtCost = source.dtCost;
+      const roleBenefitsRate = source.benefitsRate;
+      const benefitsCost = source.benefitsCost;
+      const lineLaborCost = source.totalCost;
 
       const entryId = isValidUUID(e.id) ? e.id! : generateUUID();
 
@@ -352,15 +465,14 @@ export const uploadJoinedMasterThunk = createAsyncThunk('db/uploadJoinedMaster',
       status: row.invoice_status || 'Unapproved',
       po_number: row.po_number || 'PO_' + row.work_order_number,
       total: typeof row.total === 'number' ? row.total : parseFloat(row.total || '0'),
-      created_date: row.created_date || null,
+      created_date: normalizeDateForStorage(row.created_date),
       unanswered_comments: !!row.unanswered_comments,
       dispute_reason: row.dispute_reason || null,
     }));
 
   try {
     const dedupedWos = deduplicateByKey(workOrdersToUpload, (w) => w.work_order_number);
-    const remotePayload = dedupedWos.map(({ date_work_completed: _date_work_completed, ...rest }) => rest);
-    await upsertInChunks('work_orders', remotePayload, 'work_order_number');
+    await upsertWorkOrders(dedupedWos);
 
     let invData: any[] = [];
     if (invoicesToUpload.length > 0) {
@@ -369,9 +481,9 @@ export const uploadJoinedMasterThunk = createAsyncThunk('db/uploadJoinedMaster',
       invData = dedupedInvoices;
     }
 
-    return { workOrders: dedupedWos, invoices: invData.length > 0 ? invData : invoicesToUpload };
+    return { workOrders: dedupedWos.map(withDerivedCompletionDate), invoices: invData.length > 0 ? invData : invoicesToUpload };
   } catch (_e) {
-    return { workOrders: workOrdersToUpload, invoices: invoicesToUpload };
+    return { workOrders: workOrdersToUpload.map(withDerivedCompletionDate), invoices: invoicesToUpload };
   }
 });
 
@@ -453,6 +565,12 @@ export const dbSlice = createSlice({
         state.laborEntries = action.payload.laborEntries;
         state.laborRateCategories = action.payload.laborRateCategories;
         state.overrides = action.payload.overrides;
+        state.employeePositions = action.payload.employeePositions;
+        state.employeePositionsLoadError = action.payload.employeePositionsLoadError;
+      })
+      .addCase(saveEmployeePositionThunk.fulfilled, (state, action) => {
+        // Only reached after Supabase confirmed the write and returned the stored row.
+        state.employeePositions[normalizeEmployeeKey(action.payload.employee_name)] = action.payload;
       })
       .addCase(fetchDbState.rejected, (state) => {
         state.status = 'failed';

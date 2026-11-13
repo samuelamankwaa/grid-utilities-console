@@ -53,43 +53,7 @@ export const getLaborRoleBenefitsRate = (
   return role?.benefits_rate || 0;
 };
 
-// Calculate complete line labor cost for an entry (regular + OT + DT + Benefits)
-export const calculateLaborEntryCost = (
-  e: any,
-  categories: LaborRateCategory[] = DEFAULT_LABOR_RATE_CATEGORIES
-): number => {
-  if (e.line_labor_cost !== undefined && e.line_labor_cost !== null && !isNaN(Number(e.line_labor_cost)) && Number(e.line_labor_cost) > 0) {
-    return Number(e.line_labor_cost);
-  }
-  const shiftHours = Number(e.shift_hours) || 0;
-  const hourlyRate = Number(e.hourly_rate) || 0;
-  const otHours = e.ot_hours !== undefined && e.ot_hours !== null && !isNaN(Number(e.ot_hours))
-    ? Number(e.ot_hours)
-    : (shiftHours > 8 ? parseFloat((shiftHours - 8).toFixed(2)) : 0);
-  const dtHours = e.dt_hours !== undefined && e.dt_hours !== null && !isNaN(Number(e.dt_hours))
-    ? Number(e.dt_hours)
-    : 0;
-
-  const regularHours = Math.max(0, parseFloat((shiftHours - otHours - dtHours).toFixed(2)));
-  const regularCost = parseFloat((regularHours * hourlyRate).toFixed(2));
-  const otCost = e.ot_cost !== undefined && e.ot_cost !== null && !isNaN(Number(e.ot_cost)) && Number(e.ot_cost) > 0
-    ? Number(e.ot_cost)
-    : parseFloat((otHours * hourlyRate * 1.5).toFixed(2));
-  const dtCost = e.dt_cost !== undefined && e.dt_cost !== null && !isNaN(Number(e.dt_cost)) && Number(e.dt_cost) > 0
-    ? Number(e.dt_cost)
-    : parseFloat((dtHours * hourlyRate * 2.0).toFixed(2));
-
-  const roleCat = e.role_category || 'unclassified';
-  const benefitsRate = e.benefits_rate !== undefined && e.benefits_rate !== null && !isNaN(Number(e.benefits_rate)) && Number(e.benefits_rate) > 0
-    ? Number(e.benefits_rate)
-    : getLaborRoleBenefitsRate(roleCat, categories);
-
-  const benefitsCost = e.benefits_cost !== undefined && e.benefits_cost !== null && !isNaN(Number(e.benefits_cost)) && Number(e.benefits_cost) > 0
-    ? Number(e.benefits_cost)
-    : parseFloat((shiftHours * benefitsRate).toFixed(2));
-
-  return parseFloat((regularCost + otCost + dtCost + benefitsCost).toFixed(2));
-};
+// Labor cost calculation lives in ./laborCost.ts (computeLaborEntryCost / priceLaborEntry).
 
 // Known secondary / tier labor rate mappings for frontend classification
 export interface LaborRateMapping {
@@ -177,9 +141,17 @@ export const isWorkOrderCompleted = (status?: string | null): boolean => {
   return status === 'Field Complete' || status === 'CTCC Completed' || status === 'Ready to Bill';
 };
 
+// In-memory fallback for completed work orders that have no Fulcrum completion date:
+// use the customer need date (or the legacy default). Never written to the database,
+// so a real completion date stored there is never replaced by a guessed one.
+export const withDerivedCompletionDate = <T extends { status?: string | null; date_work_completed?: unknown; customer_need_date?: unknown }>(wo: T): T => {
+  if (wo.date_work_completed || !isWorkOrderCompleted(wo.status ?? undefined)) return wo;
+  return { ...wo, date_work_completed: wo.customer_need_date || '2026-08-15' };
+};
+
 // Format a work order row for consistent database upload and state ingestion
 export const formatWorkOrderForUpload = (wo: any): WorkOrder => {
-  const isCompleted = isWorkOrderCompleted(wo.status);
+  const customerNeedDate = normalizeDateForStorage(wo.customer_need_date);
   return {
     work_order_number: String(wo.work_order_number).trim(),
     status: wo.status || 'Work Pending',
@@ -189,9 +161,11 @@ export const formatWorkOrderForUpload = (wo: any): WorkOrder => {
     address: wo.address || '',
     latitude: typeof wo.latitude === 'number' ? wo.latitude : (parseFloat(wo.latitude) || 29.7604),
     longitude: typeof wo.longitude === 'number' ? wo.longitude : (parseFloat(wo.longitude) || -95.3698),
-    locate_renewal_date: wo.locate_renewal_date || null,
-    date_work_completed: wo.date_work_completed || (isCompleted ? (wo.customer_need_date || '2026-08-15') : null),
-    customer_need_date: wo.customer_need_date || null,
+    locate_renewal_date: normalizeDateForStorage(wo.locate_renewal_date),
+    // Only the real Fulcrum completion date from the file. The display fallback is
+    // applied in memory by withDerivedCompletionDate and is never persisted.
+    date_work_completed: normalizeDateForStorage(wo.date_work_completed),
+    customer_need_date: customerNeedDate,
     locked_gates: !!wo.locked_gates,
     outage_required: !!wo.outage_required,
     permitting_needed: !!wo.permitting_needed,
@@ -210,21 +184,80 @@ export const HOUSTON_BOUNDS = {
   lngMax: -95.0,
 };
 
-// Helper to parse dates from numeric Excel format or standard date strings
-export const parseExcelDate = (val: any): string | null => {
-  if (!val) return null;
-  if (typeof val === 'number') {
-    // Excel epoch starts on Dec 30, 1899 due to 1900 leap year bug
-    const date = new Date((val - 25569) * 86400 * 1000);
-    return date.toISOString().split('T')[0];
+const pad2 = (n: number): string => String(n).padStart(2, '0');
+
+// Builds YYYY-MM-DD only if it is a real calendar date (rejects e.g. 2026-02-30).
+const toIsoIfValid = (y: number, m: number, d: number): string | null => {
+  if (y < 1900 || y > 2200 || m < 1 || m > 12 || d < 1 || d > 31) return null;
+  const dt = new Date(Date.UTC(y, m - 1, d));
+  if (dt.getUTCFullYear() !== y || dt.getUTCMonth() !== m - 1 || dt.getUTCDate() !== d) return null;
+  return `${y}-${pad2(m)}-${pad2(d)}`;
+};
+
+// Excel serial day numbers for 1954..2173; anything else is not treated as a serial.
+const EXCEL_SERIAL_MIN = 20000;
+const EXCEL_SERIAL_MAX = 99999;
+
+const excelSerialToIso = (serial: number): string | null => {
+  if (!Number.isFinite(serial) || serial < EXCEL_SERIAL_MIN || serial > EXCEL_SERIAL_MAX) return null;
+  // Excel epoch is Dec 30, 1899 (1900 leap-year bug). Computed in UTC; time of day is dropped.
+  const dt = new Date(Date.UTC(1899, 11, 30) + Math.floor(serial) * 86400000);
+  return toIsoIfValid(dt.getUTCFullYear(), dt.getUTCMonth() + 1, dt.getUTCDate());
+};
+
+/**
+ * Converts any date value from Fulcrum / Coupa / Connecteam exports (or the DB) to a
+ * calendar date string YYYY-MM-DD, or null. The calendar date is taken exactly as
+ * written; it is never shifted by the browser's timezone (the previous implementation
+ * used toISOString(), which moved dates back a day east of UTC, e.g. in Asia/Karachi).
+ *
+ * Accepts: Excel serial numbers (46212 or "46212"), YYYY-MM-DD[ time], YYYY/MM/DD,
+ * M/D/YYYY[ time] (US, as Coupa exports), D/M/YYYY when the first part is > 12,
+ * M/D/YY, and other strings Date can parse (e.g. "Aug 20, 2026").
+ */
+export const parseExcelDate = (val: unknown): string | null => {
+  if (val === null || val === undefined || val === '') return null;
+
+  if (typeof val === 'number') return excelSerialToIso(val);
+  if (val instanceof Date) {
+    return isNaN(val.getTime()) ? null : toIsoIfValid(val.getFullYear(), val.getMonth() + 1, val.getDate());
   }
-  try {
-    const parsed = new Date(val);
-    if (!isNaN(parsed.getTime())) {
-      return parsed.toISOString().split('T')[0];
-    }
-  } catch (e) {}
-  return null;
+
+  const str = String(val).trim();
+  if (!str) return null;
+
+  // Excel serial stored as text (e.g. "46212" saved into a TEXT column)
+  if (/^\d+(\.\d+)?$/.test(str)) return excelSerialToIso(parseFloat(str));
+
+  // ISO / database form: 2026-08-20, 2026-08-20 07:00:00, 2026-08-20T07:00:00Z
+  let m = str.match(/^(\d{4})-(\d{1,2})-(\d{1,2})(?:[T\s].*)?$/);
+  if (m) return toIsoIfValid(+m[1], +m[2], +m[3]);
+
+  // 2026/08/20
+  m = str.match(/^(\d{4})\/(\d{1,2})\/(\d{1,2})(?:\s.*)?$/);
+  if (m) return toIsoIfValid(+m[1], +m[2], +m[3]);
+
+  // 8/20/2026, 08-20-2026, 8/20/26 (US month-first); 20/08/2026 when unambiguous
+  m = str.match(/^(\d{1,2})[/.-](\d{1,2})[/.-](\d{2}|\d{4})(?:\s.*)?$/);
+  if (m) {
+    let a = +m[1];
+    let b = +m[2];
+    const y = m[3].length === 2 ? 2000 + +m[3] : +m[3];
+    if (a > 12 && b <= 12) [a, b] = [b, a]; // day-first export
+    return toIsoIfValid(y, a, b);
+  }
+
+  // Free-form text such as "Aug 20, 2026": use the local calendar date Date parsed.
+  const parsed = new Date(str);
+  if (isNaN(parsed.getTime())) return null;
+  return toIsoIfValid(parsed.getFullYear(), parsed.getMonth() + 1, parsed.getDate());
+};
+
+// Normalize a date for storage: YYYY-MM-DD when recognised, otherwise keep the raw text
+// so nothing is lost (an unrecognised date simply won't match date filters).
+export const normalizeDateForStorage = (val: unknown): string | null => {
+  if (val === null || val === undefined || val === '') return null;
+  return parseExcelDate(val) ?? String(val).trim();
 };
 
 // Generate a deterministic synthetic match between Invoice and Work Orders

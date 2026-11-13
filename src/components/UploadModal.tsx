@@ -16,7 +16,8 @@ import {
 import { useDispatch, useSelector } from 'react-redux';
 import { RootState } from '../store/store';
 import { parseHoursToDecimal, parseExcelDate, classifyLaborRole, getLaborRoleBenefitsRate, DEFAULT_LABOR_RATE_CATEGORIES } from '../utils/helpers';
-import { X, UploadCloud, AlertCircle, FileText, CheckCircle, Clock, ArrowRight } from 'lucide-react';
+import { X, UploadCloud, AlertCircle, FileText, CheckCircle, Clock, ArrowRight, UserCog } from 'lucide-react';
+import { getEmployeePositionOverride, normalizeEmployeeKey } from '../utils/laborCost';
 import {
   downloadWorkOrderTemplate,
   downloadInvoiceTemplate,
@@ -118,7 +119,9 @@ const TIMESHEET_HEADER_MAP: Record<string, string> = {
 
 export const UploadModal: React.FC<UploadModalProps> = ({ onClose }) => {
   const dispatch = useDispatch();
-  const { workOrders, laborRateCategories, reconciliationSummary } = useSelector((state: RootState) => state.db);
+  const { workOrders, laborRateCategories, reconciliationSummary, employeePositions } = useSelector((state: RootState) => state.db);
+  // Uploaded rows whose employee has a saved position assignment (applied at calculation time).
+  const [assignedRowsInfo, setAssignedRowsInfo] = useState<{ rows: number; employees: number } | null>(null);
   const [uploadType, setUploadType] = useState<'work_orders' | 'invoices' | 'timesheet' | 'master'>('work_orders');
   const [errorList, setErrorList] = useState<{ row: number; field: string; message: string }[]>([]);
   const [progress, setProgress] = useState<{ current: number; total: number } | null>(null);
@@ -131,6 +134,7 @@ export const UploadModal: React.FC<UploadModalProps> = ({ onClose }) => {
     setErrorList([]);
     setProgress(null);
     setSuccessCount(null);
+    setAssignedRowsInfo(null);
 
     try {
       const rawData = await parseCSVAsync(file);
@@ -401,6 +405,13 @@ export const UploadModal: React.FC<UploadModalProps> = ({ onClose }) => {
           await dispatch(uploadInvoicesThunk(validRows) as any).unwrap();
         } else if (uploadType === 'timesheet') {
           await dispatch(uploadTimesheetThunk(validRows) as any).unwrap();
+          const assigned = validRows.filter((r) => getEmployeePositionOverride(r.employee_name, employeePositions));
+          if (assigned.length > 0) {
+            setAssignedRowsInfo({
+              rows: assigned.length,
+              employees: new Set(assigned.map((r) => normalizeEmployeeKey(r.employee_name))).size,
+            });
+          }
         } else {
           await dispatch(uploadJoinedMasterThunk(validRows) as any).unwrap();
         }
@@ -486,6 +497,13 @@ export const UploadModal: React.FC<UploadModalProps> = ({ onClose }) => {
             React.createElement('div', { className: 'flex items-center gap-2.5 p-3.5 bg-green-50 rounded-xl border border-green-100 text-green-800 text-xs font-medium' },
               React.createElement(CheckCircle, { className: 'w-4 h-4 text-green-600 shrink-0' }),
               React.createElement('span', null, 'Successfully parsed and saved ' + successCount + ' rows.')
+            ),
+            assignedRowsInfo && React.createElement('div', { className: 'flex items-center gap-2.5 p-3.5 bg-amber-50 rounded-xl border border-amber-200 text-amber-900 text-xs font-medium' },
+              React.createElement(UserCog, { className: 'w-4 h-4 text-amber-600 shrink-0' }),
+              React.createElement('span', null,
+                assignedRowsInfo.rows + ' shift(s) belong to ' + assignedRowsInfo.employees +
+                ' employee(s) with an assigned position. Their assigned role and labor rate are used in all labor cost calculations.'
+              )
             ),
             reconciliationSummary && React.createElement('div', { className: 'p-4 bg-purple-50 border border-purple-200 rounded-xl space-y-2 text-xs text-purple-900' },
               React.createElement('div', { className: 'flex items-center gap-1.5 font-bold uppercase tracking-wide text-purple-700 text-[11px]' },

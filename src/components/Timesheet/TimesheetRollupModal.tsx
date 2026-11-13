@@ -1,15 +1,9 @@
 import React from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { LaborEntry, LaborRateCategory, WorkOrder } from '../../types/schemas';
+import { LaborEntry } from '../../types/schemas';
 import { formatCurrency, formatHours } from '../../utils/helpers';
-import {
-  getEntryOtHours,
-  getEntryDtHours,
-  getEntryBenefitsCost,
-  getEntryLaborCost,
-  getEntryRole,
-  getRoleCategoryBadge,
-} from './timesheetHelpers';
+import { getRoleCategoryBadge } from './timesheetHelpers';
+import { LaborBreakdownResolver } from '../../hooks/useLaborCost';
 
 export interface WorkOrderRollupData {
   workOrderNumber: string;
@@ -28,20 +22,14 @@ export interface WorkOrderRollupData {
 
 interface TimesheetRollupModalProps {
   rollupData: WorkOrderRollupData | null;
-  woMap: Map<string, WorkOrder>;
-  laborRateCategories: LaborRateCategory[];
-  gfNamesSet: Set<string>;
-  foremanNamesSet: Set<string>;
+  getBreakdown: LaborBreakdownResolver;
   isEmployee: boolean;
   onClose: () => void;
 }
 
 export const TimesheetRollupModal: React.FC<TimesheetRollupModalProps> = ({
   rollupData,
-  woMap,
-  laborRateCategories,
-  gfNamesSet,
-  foremanNamesSet,
+  getBreakdown,
   isEmployee,
   onClose,
 }) => {
@@ -113,11 +101,12 @@ export const TimesheetRollupModal: React.FC<TimesheetRollupModalProps> = ({
             </h4>
             <div className="space-y-2">
               {rollupData.entries.map((e, idx) => {
-                const role = getEntryRole(e, woMap, laborRateCategories, gfNamesSet, foremanNamesSet);
-                const otH = getEntryOtHours(e);
-                const dtH = getEntryDtHours(e);
-                const benCost = getEntryBenefitsCost(e, woMap, laborRateCategories, gfNamesSet, foremanNamesSet);
-                const laborCost = getEntryLaborCost(e, woMap, laborRateCategories, gfNamesSet, foremanNamesSet);
+                const breakdown = getBreakdown(e);
+                const role = breakdown.role;
+                const otH = breakdown.otHours;
+                const dtH = breakdown.dtHours;
+                const benCost = breakdown.benefitsCost;
+                const laborCost = breakdown.totalCost;
 
                 return (
                   <div
@@ -135,7 +124,7 @@ export const TimesheetRollupModal: React.FC<TimesheetRollupModalProps> = ({
                     </div>
                     <div className="text-right font-mono">
                       <div className="text-slate-700 font-medium">
-                        {formatHours(e.shift_hours)} @ {formatCurrency(e.hourly_rate)}/hr
+                        {formatHours(e.shift_hours)} @ {isEmployee ? '***' : formatCurrency(breakdown.hourlyRate)}/hr
                       </div>
                       <div className="text-[10px] text-slate-400">
                         {otH > 0 ? `OT: ${formatHours(otH)} · ` : ''}

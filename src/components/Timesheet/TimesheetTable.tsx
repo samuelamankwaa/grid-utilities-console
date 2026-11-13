@@ -10,19 +10,10 @@ import {
   ChevronsRight,
   X,
 } from 'lucide-react';
-import { LaborEntry, LaborRateCategory, WorkOrder } from '../../types/schemas';
+import { LaborEntry, WorkOrder } from '../../types/schemas';
 import { formatCurrency, formatHours } from '../../utils/helpers';
-import {
-  getEntryOtHours,
-  getEntryOtCost,
-  getEntryDtHours,
-  getEntryDtCost,
-  getEntryBenefitsCost,
-  getEntryLaborCost,
-  getEntryRole,
-  getRoleDisplayName,
-  getRoleCategoryBadge,
-} from './timesheetHelpers';
+import { getRoleDisplayName, getRoleCategoryBadge } from './timesheetHelpers';
+import { LaborBreakdownResolver } from '../../hooks/useLaborCost';
 
 interface TimesheetTableProps {
   entries: LaborEntry[];
@@ -30,9 +21,7 @@ interface TimesheetTableProps {
   totalFilteredCount: number;
   uniqueHeadcount: number;
   woMap: Map<string, WorkOrder>;
-  laborRateCategories: LaborRateCategory[];
-  gfNamesSet: Set<string>;
-  foremanNamesSet: Set<string>;
+  getBreakdown: LaborBreakdownResolver;
   searchQuery: string;
   onSearchChange: (q: string) => void;
   selectedRoleFilter: string;
@@ -54,9 +43,7 @@ export const TimesheetTable: React.FC<TimesheetTableProps> = ({
   totalFilteredCount,
   uniqueHeadcount,
   woMap,
-  laborRateCategories,
-  gfNamesSet,
-  foremanNamesSet,
+  getBreakdown,
   searchQuery,
   onSearchChange,
   selectedRoleFilter,
@@ -294,13 +281,14 @@ export const TimesheetTable: React.FC<TimesheetTableProps> = ({
         <tbody className="divide-y divide-slate-100">
           {paginatedEntries.map((entry) => {
             const wo = woMap.get(String(entry.work_order_number || '').trim());
-            const role = getEntryRole(entry, woMap, laborRateCategories, gfNamesSet, foremanNamesSet);
-            const otH = getEntryOtHours(entry);
-            const otCost = getEntryOtCost(entry);
-            const dtH = getEntryDtHours(entry);
-            const dtCost = getEntryDtCost(entry);
-            const benCost = getEntryBenefitsCost(entry, woMap, laborRateCategories, gfNamesSet, foremanNamesSet);
-            const laborCost = getEntryLaborCost(entry, woMap, laborRateCategories, gfNamesSet, foremanNamesSet);
+            const breakdown = getBreakdown(entry);
+            const role = breakdown.role;
+            const otH = breakdown.otHours;
+            const otCost = breakdown.otCost;
+            const dtH = breakdown.dtHours;
+            const dtCost = breakdown.dtCost;
+            const benCost = breakdown.benefitsCost;
+            const laborCost = breakdown.totalCost;
 
             return (
               <tr
@@ -353,12 +341,32 @@ export const TimesheetTable: React.FC<TimesheetTableProps> = ({
                   >
                     {role}
                   </button>
+                  {breakdown.isOverridden && (
+                    <span
+                      className="ml-1.5 px-1.5 py-0.5 rounded text-[9px] uppercase font-bold bg-amber-50 text-amber-700 border border-amber-200"
+                      title="Position assigned manually (overrides automatic classification)"
+                    >
+                      Assigned
+                    </span>
+                  )}
                 </td>
                 <td className="py-3 px-4 text-right font-mono font-medium text-slate-700">
                   {formatHours(entry.shift_hours)}
                 </td>
-                <td className="py-3 px-4 text-right font-mono text-slate-500">
-                  {isEmployee ? '***' : formatCurrency(entry.hourly_rate)}
+                <td
+                  className="py-3 px-4 text-right font-mono text-slate-500"
+                  title={
+                    !isEmployee && breakdown.isOverridden && breakdown.hourlyRate !== breakdown.sourceHourlyRate
+                      ? `Assigned rate. Timesheet rate: ${formatCurrency(breakdown.sourceHourlyRate)}`
+                      : undefined
+                  }
+                >
+                  {isEmployee ? '***' : formatCurrency(breakdown.hourlyRate)}
+                  {!isEmployee && breakdown.isOverridden && breakdown.hourlyRate !== breakdown.sourceHourlyRate && (
+                    <span className="block text-[10px] text-slate-400 line-through">
+                      {formatCurrency(breakdown.sourceHourlyRate)}
+                    </span>
+                  )}
                 </td>
                 <td className="py-3 px-4 text-right font-mono text-amber-600 font-semibold">
                   {formatHours(otH)}

@@ -1,17 +1,9 @@
 import React, { useState, useMemo, useEffect } from 'react';
 import { useSelector } from 'react-redux';
 import { RootState } from '../store/store';
-import { LaborEntry, WorkOrder } from '../types/schemas';
+import { LaborEntry } from '../types/schemas';
 import { Clock } from 'lucide-react';
-import {
-  getEntryOtHours,
-  getEntryOtCost,
-  getEntryDtHours,
-  getEntryDtCost,
-  getEntryBenefitsCost,
-  getEntryLaborCost,
-  getEntryRole,
-} from './Timesheet/timesheetHelpers';
+import { useLaborCost } from '../hooks/useLaborCost';
 import { TimesheetSummaryCards } from './Timesheet/TimesheetSummaryCards';
 import { TimesheetTable } from './Timesheet/TimesheetTable';
 import { TimesheetRoleBreakdown } from './Timesheet/TimesheetRoleBreakdown';
@@ -19,8 +11,13 @@ import { TimesheetRollupModal, WorkOrderRollupData } from './Timesheet/Timesheet
 
 export const TimesheetTab: React.FC = () => {
   const filters = useSelector((state: RootState) => state.filters);
-  const { laborEntries, laborRateCategories, workOrders, invoices } = useSelector((state: RootState) => state.db);
+  const { laborEntries, laborRateCategories, invoices } = useSelector((state: RootState) => state.db);
   const { currentUser } = useSelector((state: RootState) => state.auth);
+
+  // Shared calculation context: role precedence (override → crew → rate) and costs
+  // with employee position overrides applied.
+  const { ctx, getBreakdown } = useLaborCost();
+  const woMap = ctx.woMap;
 
   const isEmployee = currentUser?.role === 'Employee';
 
@@ -33,38 +30,6 @@ export const TimesheetTab: React.FC = () => {
   // Pagination state
   const [currentPage, setCurrentPage] = useState<number>(1);
   const [pageSize, setPageSize] = useState<number>(25);
-
-  // Fast lookup for parent Work Order details
-  const woMap = useMemo(() => {
-    const map = new Map<string, WorkOrder>();
-    workOrders.forEach((w) => {
-      if (w.work_order_number) {
-        map.set(String(w.work_order_number).trim(), w);
-      }
-    });
-    return map;
-  }, [workOrders]);
-
-  // Company-wide supervisory rosters
-  const gfNamesSet = useMemo(() => {
-    const set = new Set<string>();
-    workOrders.forEach((w) => {
-      if (w.general_foreman) {
-        set.add(w.general_foreman.trim().toLowerCase());
-      }
-    });
-    return set;
-  }, [workOrders]);
-
-  const foremanNamesSet = useMemo(() => {
-    const set = new Set<string>();
-    workOrders.forEach((w) => {
-      if (w.foreman) {
-        set.add(w.foreman.trim().toLowerCase());
-      }
-    });
-    return set;
-  }, [workOrders]);
 
   // Reset to page 1 whenever filters or search query change
   useEffect(() => {
@@ -102,52 +67,50 @@ export const TimesheetTab: React.FC = () => {
   const filteredEntries = useMemo(() => {
     if (selectedRoleFilter === 'all') return baseFilteredEntries;
     return baseFilteredEntries.filter((entry) => {
-      const roleCat = getEntryRole(entry, woMap, laborRateCategories, gfNamesSet, foremanNamesSet);
+      const roleCat = getBreakdown(entry).role;
       if (selectedRoleFilter === 'unclassified') return roleCat === 'unclassified';
       if (selectedRoleFilter === 'General Foreman' || selectedRoleFilter === 'GForeman') {
         return roleCat === 'General Foreman' || roleCat === 'GForeman';
       }
       return roleCat.toLowerCase() === selectedRoleFilter.toLowerCase();
     });
-  }, [baseFilteredEntries, selectedRoleFilter, woMap, laborRateCategories, gfNamesSet, foremanNamesSet]);
+  }, [baseFilteredEntries, selectedRoleFilter, getBreakdown]);
 
-  // Sorted entries
+  // Sorted entries (calculated columns sort by their effective, override-aware values)
   const sortedEntries = useMemo(() => {
-    return [...filteredEntries].sort((a, b) => {
-      let aVal: any = a[sortField as keyof LaborEntry];
-      let bVal: any = b[sortField as keyof LaborEntry];
-
-      if (sortField === 'general_foreman') {
-        aVal = woMap.get(String(a.work_order_number || '').trim())?.general_foreman || '';
-        bVal = woMap.get(String(b.work_order_number || '').trim())?.general_foreman || '';
-      } else if (sortField === 'foreman') {
-        aVal = woMap.get(String(a.work_order_number || '').trim())?.foreman || '';
-        bVal = woMap.get(String(b.work_order_number || '').trim())?.foreman || '';
-      } else if (sortField === 'role_category') {
-        aVal = getEntryRole(a, woMap, laborRateCategories, gfNamesSet, foremanNamesSet);
-        bVal = getEntryRole(b, woMap, laborRateCategories, gfNamesSet, foremanNamesSet);
-      } else if (sortField === 'ot_hours') {
-        aVal = getEntryOtHours(a);
-        bVal = getEntryOtHours(b);
-      } else if (sortField === 'ot_cost') {
-        aVal = getEntryOtCost(a);
-        bVal = getEntryOtCost(b);
-      } else if (sortField === 'dt_hours') {
-        aVal = getEntryDtHours(a);
-        bVal = getEntryDtHours(b);
-      } else if (sortField === 'dt_cost') {
-        aVal = getEntryDtCost(a);
-        bVal = getEntryDtCost(b);
-      } else if (sortField === 'benefits_cost') {
-        aVal = getEntryBenefitsCost(a, woMap, laborRateCategories, gfNamesSet, foremanNamesSet);
-        bVal = getEntryBenefitsCost(b, woMap, laborRateCategories, gfNamesSet, foremanNamesSet);
-      } else if (sortField === 'line_labor_cost') {
-        aVal = getEntryLaborCost(a, woMap, laborRateCategories, gfNamesSet, foremanNamesSet);
-        bVal = getEntryLaborCost(b, woMap, laborRateCategories, gfNamesSet, foremanNamesSet);
+    const calculatedSortValue = (e: LaborEntry): string | number | undefined => {
+      const b = getBreakdown(e);
+      switch (sortField) {
+        case 'general_foreman':
+          return woMap.get(String(e.work_order_number || '').trim())?.general_foreman || '';
+        case 'foreman':
+          return woMap.get(String(e.work_order_number || '').trim())?.foreman || '';
+        case 'role_category':
+          return b.role;
+        case 'hourly_rate':
+          return b.hourlyRate;
+        case 'ot_hours':
+          return b.otHours;
+        case 'ot_cost':
+          return b.otCost;
+        case 'dt_hours':
+          return b.dtHours;
+        case 'dt_cost':
+          return b.dtCost;
+        case 'benefits_cost':
+          return b.benefitsCost;
+        case 'line_labor_cost':
+          return b.totalCost;
+        default: {
+          const raw = e[sortField as keyof LaborEntry];
+          return typeof raw === 'string' || typeof raw === 'number' ? raw : undefined;
+        }
       }
+    };
 
-      if (aVal === undefined || aVal === null) aVal = '';
-      if (bVal === undefined || bVal === null) bVal = '';
+    return [...filteredEntries].sort((a, b) => {
+      let aVal = calculatedSortValue(a) ?? '';
+      let bVal = calculatedSortValue(b) ?? '';
       if (typeof aVal === 'string') aVal = aVal.toLowerCase();
       if (typeof bVal === 'string') bVal = bVal.toLowerCase();
 
@@ -155,7 +118,7 @@ export const TimesheetTab: React.FC = () => {
       if (aVal > bVal) return sortOrder === 'asc' ? 1 : -1;
       return 0;
     });
-  }, [filteredEntries, sortField, sortOrder, woMap, laborRateCategories, gfNamesSet, foremanNamesSet]);
+  }, [filteredEntries, sortField, sortOrder, woMap, getBreakdown]);
 
   // Pagination calculation
   const totalPages = Math.max(1, Math.ceil(sortedEntries.length / pageSize));
@@ -169,8 +132,8 @@ export const TimesheetTab: React.FC = () => {
   // Overall KPIs
   const totalHours = useMemo(() => filteredEntries.reduce((sum, e) => sum + e.shift_hours, 0), [filteredEntries]);
   const totalLaborCost = useMemo(
-    () => filteredEntries.reduce((sum, e) => sum + getEntryLaborCost(e, woMap, laborRateCategories, gfNamesSet, foremanNamesSet), 0),
-    [filteredEntries, woMap, laborRateCategories, gfNamesSet, foremanNamesSet]
+    () => filteredEntries.reduce((sum, e) => sum + getBreakdown(e).totalCost, 0),
+    [filteredEntries, getBreakdown]
   );
   const uniqueHeadcount = useMemo(() => new Set(filteredEntries.map((e) => e.employee_name.trim())).size, [filteredEntries]);
 
@@ -191,26 +154,26 @@ export const TimesheetTab: React.FC = () => {
     };
 
     baseFilteredEntries.forEach((entry) => {
-      let cat = getEntryRole(entry, woMap, laborRateCategories, gfNamesSet, foremanNamesSet);
-      if (cat === 'GForeman') cat = 'General Foreman';
+      const b = getBreakdown(entry);
+      const cat = b.role === 'GForeman' ? 'General Foreman' : b.role;
       if (!map[cat]) {
         map[cat] = { count: 0, hours: 0, cost: 0, employees: new Set() };
       }
       map[cat].count += 1;
       map[cat].hours += entry.shift_hours;
-      map[cat].cost += getEntryLaborCost(entry, woMap, laborRateCategories, gfNamesSet, foremanNamesSet);
+      map[cat].cost += b.totalCost;
       if (entry.employee_name) {
         map[cat].employees.add(entry.employee_name.trim());
       }
     });
 
     return map;
-  }, [baseFilteredEntries, laborRateCategories, woMap, gfNamesSet, foremanNamesSet]);
+  }, [baseFilteredEntries, getBreakdown]);
 
   // Unclassified Rates Summary
   const unclassifiedEntries = useMemo(
-    () => baseFilteredEntries.filter((e) => getEntryRole(e, woMap, laborRateCategories, gfNamesSet, foremanNamesSet) === 'unclassified'),
-    [baseFilteredEntries, laborRateCategories, woMap, gfNamesSet, foremanNamesSet]
+    () => baseFilteredEntries.filter((e) => getBreakdown(e).role === 'unclassified'),
+    [baseFilteredEntries, getBreakdown]
   );
   const unclassifiedCount = unclassifiedEntries.length;
   const unclassifiedHours = unclassifiedEntries.reduce((sum, e) => sum + e.shift_hours, 0);
@@ -218,33 +181,32 @@ export const TimesheetTab: React.FC = () => {
   const unclassifiedRateDistribution = useMemo(() => {
     const dist: Record<number, { count: number; hours: number; cost: number; employees: Set<string> }> = {};
     unclassifiedEntries.forEach((e) => {
-      if (!dist[e.hourly_rate]) {
-        dist[e.hourly_rate] = { count: 0, hours: 0, cost: 0, employees: new Set() };
+      const b = getBreakdown(e);
+      if (!dist[b.hourlyRate]) {
+        dist[b.hourlyRate] = { count: 0, hours: 0, cost: 0, employees: new Set() };
       }
-      dist[e.hourly_rate].count += 1;
-      dist[e.hourly_rate].hours += e.shift_hours;
-      dist[e.hourly_rate].cost += getEntryLaborCost(e, woMap, laborRateCategories, gfNamesSet, foremanNamesSet);
+      dist[b.hourlyRate].count += 1;
+      dist[b.hourlyRate].hours += e.shift_hours;
+      dist[b.hourlyRate].cost += b.totalCost;
       if (e.employee_name) {
-        dist[e.hourly_rate].employees.add(e.employee_name.trim());
+        dist[b.hourlyRate].employees.add(e.employee_name.trim());
       }
     });
     return Object.entries(dist).map(([rateStr, stats]) => ({
       rate: parseFloat(rateStr),
       ...stats,
     }));
-  }, [unclassifiedEntries, woMap, laborRateCategories, gfNamesSet, foremanNamesSet]);
+  }, [unclassifiedEntries, getBreakdown]);
 
   // Rollup details for selected work order
   const activeWorkOrderRollup: WorkOrderRollupData | null = useMemo(() => {
     if (!selectedWorkOrderForRollup) return null;
-    const wo = workOrders.find((w) => String(w.work_order_number).trim() === String(selectedWorkOrderForRollup).trim());
-    const woInvoices = invoices.filter((i) => String(i.work_order_number).trim() === String(selectedWorkOrderForRollup).trim());
-    const woEntries = laborEntries.filter((e) => String(e.work_order_number).trim() === String(selectedWorkOrderForRollup).trim());
+    const woKey = String(selectedWorkOrderForRollup).trim();
+    const wo = woMap.get(woKey);
+    const woInvoices = invoices.filter((i) => String(i.work_order_number).trim() === woKey);
+    const woEntries = laborEntries.filter((e) => String(e.work_order_number).trim() === woKey);
     const woHours = woEntries.reduce((sum, e) => sum + e.shift_hours, 0);
-    const woCost = woEntries.reduce(
-      (sum, e) => sum + getEntryLaborCost(e, woMap, laborRateCategories, gfNamesSet, foremanNamesSet),
-      0
-    );
+    const woCost = woEntries.reduce((sum, e) => sum + getBreakdown(e).totalCost, 0);
 
     const invoiceTotal = woInvoices.reduce((sum, i) => sum + (i.total || 0), 0);
     const grossMargin = invoiceTotal - woCost;
@@ -264,7 +226,7 @@ export const TimesheetTab: React.FC = () => {
       marginPct,
       entries: woEntries,
     };
-  }, [selectedWorkOrderForRollup, laborEntries, workOrders, invoices, woMap, laborRateCategories, gfNamesSet, foremanNamesSet]);
+  }, [selectedWorkOrderForRollup, laborEntries, invoices, woMap, getBreakdown]);
 
   const handleSort = (field: string) => {
     if (sortField === field) {
@@ -310,9 +272,7 @@ export const TimesheetTab: React.FC = () => {
         totalFilteredCount={filteredEntries.length}
         uniqueHeadcount={uniqueHeadcount}
         woMap={woMap}
-        laborRateCategories={laborRateCategories}
-        gfNamesSet={gfNamesSet}
-        foremanNamesSet={foremanNamesSet}
+        getBreakdown={getBreakdown}
         searchQuery={searchQuery}
         onSearchChange={setSearchQuery}
         selectedRoleFilter={selectedRoleFilter}
@@ -344,10 +304,7 @@ export const TimesheetTab: React.FC = () => {
       {/* Per-Work-Order Labor Rollup Modal */}
       <TimesheetRollupModal
         rollupData={activeWorkOrderRollup}
-        woMap={woMap}
-        laborRateCategories={laborRateCategories}
-        gfNamesSet={gfNamesSet}
-        foremanNamesSet={foremanNamesSet}
+        getBreakdown={getBreakdown}
         isEmployee={isEmployee}
         onClose={() => setSelectedWorkOrderForRollup(null)}
       />

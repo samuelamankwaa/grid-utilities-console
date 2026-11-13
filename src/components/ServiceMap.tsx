@@ -56,6 +56,10 @@ export const ServiceMap: React.FC = () => {
 
         const f = wo.foreman;
         if (f) {
+          // Invoices are date-filtered by their own created date, so a crew with invoices
+          // in range is charted even if none of its work orders were completed in range.
+          if (!GFData[wo.general_foreman]) GFData[wo.general_foreman] = { name: wo.general_foreman, margin: 0 };
+          if (!FData[f]) FData[f] = { name: f, gf: wo.general_foreman, margin: 0 };
           if (!bookedDatesMap[f]) bookedDatesMap[f] = new Set();
           if (invDate) {
             bookedDatesMap[f].add(invDate);

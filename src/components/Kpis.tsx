@@ -2,14 +2,16 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { useSelector, useDispatch } from 'react-redux';
 import { RootState, AppDispatch } from '../store/store';
 import { saveOverrideThunk } from '../store/dbSlice';
-import { getFilterFingerprint, getWorkOrderReportingDate, getInvoiceDate, calculateLaborEntryCost, formatHours } from '../utils/helpers';
+import { getFilterFingerprint, getWorkOrderReportingDate, getInvoiceDate, formatHours } from '../utils/helpers';
+import { useLaborCost } from '../hooks/useLaborCost';
 import { Pencil, CheckCircle, Clock, DollarSign } from 'lucide-react';
 import { motion } from 'framer-motion';
 
 export const Kpis: React.FC = () => {
   const dispatch = useDispatch<AppDispatch>();
   const filters = useSelector((state: RootState) => state.filters);
-  const { workOrders, invoices, laborEntries, laborRateCategories, overrides, dailyExpenseRate } = useSelector((state: RootState) => state.db);
+  const { workOrders, invoices, laborEntries, overrides, dailyExpenseRate } = useSelector((state: RootState) => state.db);
+  const { getBreakdown } = useLaborCost();
   const { currentUser } = useSelector((state: RootState) => state.auth);
 
   const role = currentUser?.role || 'Supervisor';
@@ -134,10 +136,11 @@ export const Kpis: React.FC = () => {
     });
   }, [laborEntries, workOrders, filters]);
 
-  // Base Labor Cost: complete sum of regular + OT + DT + Benefits across matching shifts
+  // Base Labor Cost: regular + OT + DT + Benefits across matching shifts, with employee
+  // position overrides applied (utils/laborCost.ts).
   const baseLaborCost = useMemo(() => {
-    return filteredLabor.reduce((sum, e) => sum + calculateLaborEntryCost(e, laborRateCategories), 0);
-  }, [filteredLabor, laborRateCategories]);
+    return filteredLabor.reduce((sum, e) => sum + getBreakdown(e).totalCost, 0);
+  }, [filteredLabor, getBreakdown]);
 
   const totalLaborHours = useMemo(() => {
     return filteredLabor.reduce((sum, e) => sum + (e.shift_hours || 0), 0);
