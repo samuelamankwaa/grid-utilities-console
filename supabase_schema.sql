@@ -85,7 +85,7 @@ CREATE TABLE IF NOT EXISTS public.connecteam_labor_entries (
 CREATE TABLE IF NOT EXISTS public.labor_rate_categories (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     category_name TEXT NOT NULL UNIQUE,
-    standard_rate NUMERIC NOT NULL,
+    standard_rate NUMERIC, -- NULL = position-only role (no rate card yet)
     ot_rate NUMERIC,
     dt_rate NUMERIC,
     benefits_rate NUMERIC,
@@ -125,12 +125,27 @@ VALUES
     ('Apprentice', 37.60, 56.40, 75.20, 15.48, 0.20),
     ('Groundman', 26.94, 40.41, 53.88, 14.66, 0.20),
     ('Pole Truck Helper', 15.00, 22.50, 30.00, 9.48, 0.20)
-ON CONFLICT (category_name) DO UPDATE 
+ON CONFLICT (category_name) DO UPDATE
 SET standard_rate = EXCLUDED.standard_rate,
     ot_rate = EXCLUDED.ot_rate,
     dt_rate = EXCLUDED.dt_rate,
     benefits_rate = EXCLUDED.benefits_rate,
     match_tolerance = EXCLUDED.match_tolerance;
+
+-- Position-only roles (no rate card yet; rate entered per employee in Add Position).
+-- DO NOTHING so rates filled in later are not reset by re-running this script.
+INSERT INTO public.labor_rate_categories (category_name, standard_rate, ot_rate, dt_rate, benefits_rate, match_tolerance)
+VALUES
+    ('Superintendent', NULL, NULL, NULL, NULL, 0.20),
+    ('Operator', NULL, NULL, NULL, NULL, 0.20),
+    ('Trench Digger', NULL, NULL, NULL, NULL, 0.20),
+    ('Apprentice 1st Period', NULL, NULL, NULL, NULL, 0.20),
+    ('Apprentice- 5th Period', NULL, NULL, NULL, NULL, 0.20),
+    ('Apprentice- 7th Period', NULL, NULL, NULL, NULL, 0.20),
+    ('Groundman- 1st Year', NULL, NULL, NULL, NULL, 0.20),
+    ('Groundman- Thereafter', NULL, NULL, NULL, NULL, 0.20),
+    ('Administrative Operations', NULL, NULL, NULL, NULL, 0.20)
+ON CONFLICT (category_name) DO NOTHING;
 
 -- ==============================================================================
 -- 3. FINANCIAL INTEGRITY LAYER: POSTGRES CHECK CONSTRAINTS

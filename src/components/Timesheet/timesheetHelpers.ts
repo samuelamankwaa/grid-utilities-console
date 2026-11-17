@@ -18,8 +18,11 @@ export const getRoleDisplayName = (role: string): string => {
     case 'Pole Truck Helper':
       return 'Pole Truck Helper';
     case 'unclassified':
-    default:
+    case '':
       return 'Unclassified Rate';
+    default:
+      // Any other configured role (e.g. Superintendent, Operator) shows its own name.
+      return role;
   }
 };
 
@@ -40,8 +43,19 @@ export const getRoleCategoryBadge = (role: string): string => {
       return 'bg-amber-50 text-amber-700 border-amber-200';
     case 'Pole Truck Helper':
       return 'bg-slate-100 text-slate-700 border-slate-300';
+    case 'Superintendent':
+      return 'bg-fuchsia-50 text-fuchsia-700 border-fuchsia-200';
+    case 'Operator':
+    case 'Trench Digger':
+      return 'bg-orange-50 text-orange-700 border-orange-200';
+    case 'Administrative Operations':
+      return 'bg-gray-100 text-gray-700 border-gray-300';
     case 'unclassified':
-    default:
+    case '':
       return 'bg-red-50 text-red-700 border-red-200 font-semibold';
+    default:
+      if (role.startsWith('Apprentice')) return 'bg-emerald-50 text-emerald-700 border-emerald-200';
+      if (role.startsWith('Groundman')) return 'bg-amber-50 text-amber-700 border-amber-200';
+      return 'bg-slate-100 text-slate-700 border-slate-300';
   }
 };
