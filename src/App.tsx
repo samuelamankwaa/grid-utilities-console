@@ -108,14 +108,15 @@ export const App: React.FC = () => {
 
           {/* Supervisor Analytics (Lazy Loaded) */}
           {isSupervisor && (
-            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+            <>
               <Suspense fallback={<ComponentLoadingFallback label="Loading profit margin analytics..." />}>
                 <ProfitMarginOverTime />
               </Suspense>
+              {/* Full-width, last on the page: crew margin charts need room for names */}
               <Suspense fallback={<ComponentLoadingFallback label="Loading service territory map..." />}>
                 <ServiceMap />
               </Suspense>
-            </div>
+            </>
           )}
         </main>
       ) : (
