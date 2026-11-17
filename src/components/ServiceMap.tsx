@@ -1,23 +1,112 @@
-import React, { useMemo } from 'react';
+import React, { useMemo, useState } from 'react';
 import { getWorkOrderReportingDate, getInvoiceDate } from '../utils/helpers';
 import { useSelector } from 'react-redux';
 import { RootState } from '../store/store';
-import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell } from 'recharts';
+import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell, LabelList, ReferenceLine } from 'recharts';
 import { motion } from 'framer-motion';
 
-const CustomTooltip = ({ active, payload, label }: any) => {
-  if (active && payload && payload.length) {
-    const val = payload[0].value;
-    return (
-      React.createElement('div', { className: 'bg-white/95 backdrop-blur-md p-3 rounded-xl shadow-xl border border-slate-100 flex flex-col gap-1 min-w-[150px] z-50' },
-        React.createElement('p', { className: 'text-[10px] font-bold text-slate-400 uppercase tracking-wider' }, label),
-        React.createElement('p', { className: 'text-xs font-extrabold ' + (val >= 0 ? 'text-green-600' : 'text-red-600') }, 
-          'Margin: ' + (val < 0 ? '-' : '') + '$' + Math.abs(Math.round(val)).toLocaleString()
-        )
-      )
-    );
-  }
-  return null;
+type MarginRow = { name: string; margin: number; gf?: string };
+
+// $3,612,400 -> "$3.6M", 84,200 -> "$84k", -1,250 -> "-$1.3k"
+const formatCompactCurrency = (value: number): string => {
+  const sign = value < 0 ? '-' : '';
+  const abs = Math.abs(value);
+  if (abs >= 1_000_000) return `${sign}$${(abs / 1_000_000).toFixed(abs >= 10_000_000 ? 0 : 1)}M`;
+  if (abs >= 1_000) return `${sign}$${(abs / 1_000).toFixed(abs >= 100_000 ? 0 : 1)}k`;
+  return `${sign}$${Math.round(abs)}`;
+};
+
+const MarginTooltip = ({ active, payload }: { active?: boolean; payload?: { payload: MarginRow }[] }) => {
+  if (!active || !payload || payload.length === 0) return null;
+  const row = payload[0].payload;
+  const positive = row.margin >= 0;
+  return (
+    <div className="bg-white/95 backdrop-blur-md p-3 rounded-xl shadow-xl border border-slate-100 flex flex-col gap-1 min-w-[170px]">
+      <p className="text-xs font-bold text-slate-700">{row.name}</p>
+      {row.gf && <p className="text-[10px] text-slate-400">GF: {row.gf}</p>}
+      <p className={`text-xs font-extrabold ${positive ? 'text-emerald-600' : 'text-rose-600'}`}>
+        Margin: {positive ? '' : '-'}${Math.abs(Math.round(row.margin)).toLocaleString()}
+      </p>
+    </div>
+  );
+};
+
+const ROW_HEIGHT = 30;
+const COLLAPSED_ROWS = 12;
+
+const MarginBarList: React.FC<{
+  title: string;
+  data: MarginRow[];
+  positiveColor: string;
+}> = ({ title, data, positiveColor }) => {
+  const [expanded, setExpanded] = useState(false);
+  const visible = expanded ? data : data.slice(0, COLLAPSED_ROWS);
+  const hidden = data.length - visible.length;
+  const chartHeight = Math.max(visible.length, 3) * ROW_HEIGHT + 40;
+  const hasNegative = visible.some((d) => d.margin < 0);
+
+  return (
+    <div className="flex flex-col gap-3 min-w-0">
+      <div className="flex items-baseline justify-between gap-2">
+        <h3 className="text-xs font-bold text-slate-500 uppercase tracking-wider">{title}</h3>
+        <span className="text-[11px] text-slate-400">{data.length} total · sorted by margin</span>
+      </div>
+
+      {data.length === 0 ? (
+        <div className="h-32 flex items-center justify-center text-xs text-slate-400 border border-dashed border-slate-200 rounded-lg">
+          No data for the selected filters
+        </div>
+      ) : (
+        <div style={{ height: chartHeight }} className="w-full">
+          <ResponsiveContainer width="100%" height="100%">
+            <BarChart data={visible} layout="vertical" margin={{ top: 4, right: 56, left: 8, bottom: 4 }} barCategoryGap={6}>
+              <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" horizontal={false} />
+              <XAxis
+                type="number"
+                tickFormatter={formatCompactCurrency}
+                tick={{ fill: '#94a3b8', fontSize: 10 }}
+                axisLine={false}
+                tickLine={false}
+              />
+              <YAxis
+                type="category"
+                dataKey="name"
+                width={150}
+                interval={0}
+                tick={{ fill: '#475569', fontSize: 11 }}
+                tickFormatter={(name: string) => (name.length > 22 ? `${name.slice(0, 21)}…` : name)}
+                axisLine={false}
+                tickLine={false}
+              />
+              {hasNegative && <ReferenceLine x={0} stroke="#cbd5e1" />}
+              <Tooltip content={<MarginTooltip />} cursor={{ fill: '#f8fafc' }} />
+              <Bar dataKey="margin" radius={[0, 4, 4, 0]} maxBarSize={20}>
+                {visible.map((entry) => (
+                  <Cell key={entry.name} fill={entry.margin >= 0 ? positiveColor : '#ef4444'} />
+                ))}
+                <LabelList
+                  dataKey="margin"
+                  position="right"
+                  formatter={(v: unknown) => formatCompactCurrency(Number(v))}
+                  style={{ fill: '#64748b', fontSize: 10, fontWeight: 600 }}
+                />
+              </Bar>
+            </BarChart>
+          </ResponsiveContainer>
+        </div>
+      )}
+
+      {data.length > COLLAPSED_ROWS && (
+        <button
+          type="button"
+          onClick={() => setExpanded((v) => !v)}
+          className="self-start text-xs font-semibold text-blue-600 hover:text-blue-800 cursor-pointer"
+        >
+          {expanded ? 'Show top 12 only' : `Show all (${hidden} more)`}
+        </button>
+      )}
+    </div>
+  );
 };
 
 export const ServiceMap: React.FC = () => {
@@ -39,7 +128,7 @@ export const ServiceMap: React.FC = () => {
     invoices.forEach(inv => {
       if (filters.status !== 'All statuses' && inv.status !== filters.status) return;
       if (filters.workOrderNumbers && filters.workOrderNumbers.length > 0 && !filters.workOrderNumbers.includes(inv.work_order_number || '')) return;
-      
+
       const invDate = getInvoiceDate(inv);
       if (invDate) {
         if (filters.startDate && invDate < filters.startDate) return;
@@ -88,10 +177,6 @@ export const ServiceMap: React.FC = () => {
       const gf = wo.general_foreman;
       const f = wo.foreman;
 
-      if (filters.generalForeman !== 'All crews' && gf !== filters.generalForeman) return;
-      if (filters.foreman.length > 0 && !filters.foreman.includes(f)) return;
-      if (filters.area !== 'All areas' && wo.area !== filters.area) return;
-
       if (!GFData[gf]) {
         GFData[gf] = { name: gf, margin: 0 };
       }
@@ -121,99 +206,24 @@ export const ServiceMap: React.FC = () => {
     };
   }, [workOrders, invoices, dailyExpenseRate, filters]);
 
-  const formatYAxis = (tick: number) => {
-    const isNeg = tick < 0;
-    const absVal = Math.abs(tick);
-    if (absVal >= 1000) {
-      return (isNeg ? '-' : '') + '$' + Math.round(absVal / 1000) + 'k';
-    }
-    return (isNeg ? '-' : '') + '$' + Math.round(absVal);
-  };
-
   return (
-    React.createElement(motion.div, {
-      initial: { opacity: 0, y: 15 },
-      animate: { opacity: 1, y: 0 },
-      transition: { duration: 0.4 },
-      className: 'bg-white p-6 rounded-xl shadow-sm border border-slate-200 flex flex-col gap-6 select-none'
-    },
-      React.createElement('div', { className: 'flex flex-col gap-1' },
-        React.createElement('h2', { className: 'text-lg font-semibold text-slate-800 my-0' }, 'Profit Margin Performance'),
-        React.createElement('p', { className: 'text-xs text-slate-500' }, 'Comparative profit margins for General Foremen and Foremen based on booked days.')
-      ),
-      React.createElement('div', { className: 'grid grid-cols-1 md:grid-cols-2 gap-6' },
-        // General Foreman Chart
-        React.createElement('div', { className: 'flex flex-col gap-3' },
-          React.createElement('h3', { className: 'text-xs font-bold text-slate-500 uppercase tracking-wider' }, 'General Foreman'),
-          React.createElement('div', { className: 'h-[220px] w-full' },
-            React.createElement(ResponsiveContainer, { width: '100%', height: '100%' } as any,
-              React.createElement(BarChart, { data: gfData, margin: { top: 10, right: 10, left: -20, bottom: 20 } },
-                React.createElement(CartesianGrid, { strokeDasharray: '3 3', stroke: '#f1f5f9', vertical: false }),
-                React.createElement(XAxis, { 
-                  dataKey: 'name', 
-                  tick: { fill: '#94a3b8', fontSize: 10 },
-                  axisLine: false,
-                  tickLine: false,
-                  interval: 0,
-                  angle: -25,
-                  textAnchor: 'end'
-                }),
-                React.createElement(YAxis, { 
-                  tick: { fill: '#94a3b8', fontSize: 10 },
-                  axisLine: false,
-                  tickLine: false,
-                  tickFormatter: formatYAxis
-                }),
-                React.createElement(Tooltip, { content: React.createElement(CustomTooltip, null), cursor: { fill: '#f8fafc' } }),
-                React.createElement(Bar, { dataKey: 'margin', radius: [4, 4, 0, 0] },
-                  gfData.map((entry, index) => 
-                    React.createElement(Cell, { 
-                      key: `cell-${index}`, 
-                      fill: entry.margin >= 0 ? '#10b981' : '#ef4444' 
-                    })
-                  )
-                )
-              )
-            )
-          )
-        ),
-        // Foreman Chart
-        React.createElement('div', { className: 'flex flex-col gap-3' },
-          React.createElement('h3', { className: 'text-xs font-bold text-slate-500 uppercase tracking-wider' }, 'Foreman'),
-          React.createElement('div', { className: 'h-[220px] w-full' },
-            React.createElement(ResponsiveContainer, { width: '100%', height: '100%' } as any,
-              React.createElement(BarChart, { data: foremanData, margin: { top: 10, right: 10, left: -20, bottom: 20 } },
-                React.createElement(CartesianGrid, { strokeDasharray: '3 3', stroke: '#f1f5f9', vertical: false }),
-                React.createElement(XAxis, { 
-                  dataKey: 'name', 
-                  tick: { fill: '#94a3b8', fontSize: 10 },
-                  axisLine: false,
-                  tickLine: false,
-                  interval: 0,
-                  angle: -25,
-                  textAnchor: 'end'
-                }),
-                React.createElement(YAxis, { 
-                  tick: { fill: '#94a3b8', fontSize: 10 },
-                  axisLine: false,
-                  tickLine: false,
-                  tickFormatter: formatYAxis
-                }),
-                React.createElement(Tooltip, { content: React.createElement(CustomTooltip, null), cursor: { fill: '#f8fafc' } }),
-                React.createElement(Bar, { dataKey: 'margin', radius: [4, 4, 0, 0] },
-                  foremanData.map((entry, index) => 
-                    React.createElement(Cell, { 
-                      key: `cell-${index}`, 
-                      fill: entry.margin >= 0 ? '#3b82f6' : '#ef4444' 
-                    })
-                  )
-                )
-              )
-            )
-          )
-        )
-      )
-    )
+    <motion.div
+      initial={{ opacity: 0, y: 15 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ duration: 0.4 }}
+      className="bg-white p-6 rounded-xl shadow-sm border border-slate-200 flex flex-col gap-6 select-none"
+    >
+      <div className="flex flex-col gap-1">
+        <h2 className="text-lg font-semibold text-slate-800 my-0">Profit Margin Performance</h2>
+        <p className="text-xs text-slate-500">
+          Margin per General Foreman and Foreman: invoiced revenue minus booked days × ${dailyExpenseRate.toLocaleString()}.
+        </p>
+      </div>
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
+        <MarginBarList title="General Foreman" data={gfData} positiveColor="#10b981" />
+        <MarginBarList title="Foreman" data={foremanData} positiveColor="#3b82f6" />
+      </div>
+    </motion.div>
   );
 };
 export default ServiceMap;

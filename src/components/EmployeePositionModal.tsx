@@ -185,7 +185,7 @@ export const EmployeePositionModal: React.FC<EmployeePositionModalProps> = ({ on
     return { current, next, delta: next - current };
   }, [selected, isValid, rateValue, roleCategory, ctx, getBreakdown]);
 
-  const standardRate = roleCategory ? getLaborRoleRates(roleCategory, laborRateCategories)?.standard_rate : undefined;
+  const standardRate = roleCategory ? getLaborRoleRates(roleCategory, laborRateCategories)?.standard_rate ?? undefined : undefined;
 
   const handleSave = async () => {
     setTouched({ employee: true, role: true, rate: true });

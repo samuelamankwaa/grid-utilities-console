@@ -9,6 +9,18 @@ export const DEFAULT_LABOR_RATE_CATEGORIES: LaborRateCategory[] = [
   { category_name: 'Apprentice', standard_rate: 37.60, ot_rate: 56.40, dt_rate: 75.20, benefits_rate: 15.48, match_tolerance: 0.20 },
   { category_name: 'Groundman', standard_rate: 26.94, ot_rate: 40.41, dt_rate: 53.88, benefits_rate: 14.66, match_tolerance: 0.20 },
   { category_name: 'Pole Truck Helper', standard_rate: 15.00, ot_rate: 22.50, dt_rate: 30.00, benefits_rate: 9.48, match_tolerance: 0.20 },
+  // Position-only roles (no rate card yet). Selectable in Add Position; the hourly rate is
+  // entered per employee there. Not used for rate-based role detection. Benefits are $0
+  // until a benefits_rate is set. Keep in sync with labor_rate_categories in the database.
+  { category_name: 'Superintendent', standard_rate: null, ot_rate: null, dt_rate: null, benefits_rate: null, match_tolerance: 0.20 },
+  { category_name: 'Operator', standard_rate: null, ot_rate: null, dt_rate: null, benefits_rate: null, match_tolerance: 0.20 },
+  { category_name: 'Trench Digger', standard_rate: null, ot_rate: null, dt_rate: null, benefits_rate: null, match_tolerance: 0.20 },
+  { category_name: 'Apprentice 1st Period', standard_rate: null, ot_rate: null, dt_rate: null, benefits_rate: null, match_tolerance: 0.20 },
+  { category_name: 'Apprentice- 5th Period', standard_rate: null, ot_rate: null, dt_rate: null, benefits_rate: null, match_tolerance: 0.20 },
+  { category_name: 'Apprentice- 7th Period', standard_rate: null, ot_rate: null, dt_rate: null, benefits_rate: null, match_tolerance: 0.20 },
+  { category_name: 'Groundman- 1st Year', standard_rate: null, ot_rate: null, dt_rate: null, benefits_rate: null, match_tolerance: 0.20 },
+  { category_name: 'Groundman- Thereafter', standard_rate: null, ot_rate: null, dt_rate: null, benefits_rate: null, match_tolerance: 0.20 },
+  { category_name: 'Administrative Operations', standard_rate: null, ot_rate: null, dt_rate: null, benefits_rate: null, match_tolerance: 0.20 },
 ];
 
 // Helper to format currency
@@ -102,6 +114,7 @@ export const classifyLaborRole = (
   // 2. Rate-based matching against configured rate categories with tolerance
   if (typeof hourlyRate === 'number' && !isNaN(hourlyRate) && hourlyRate > 0) {
     for (const cat of categories) {
+      if (cat.standard_rate === null) continue; // position-only role: never guessed from a rate
       const tolerance = cat.match_tolerance !== undefined ? cat.match_tolerance : 0.20;
       if (Math.abs(hourlyRate - cat.standard_rate) <= tolerance) {
         return cat.category_name;

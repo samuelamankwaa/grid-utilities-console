@@ -75,7 +75,8 @@ export const TimesheetRoleBreakdown: React.FC<TimesheetRoleBreakdownProps> = ({
             const refCat = laborRateCategories.find(
               (c) => c.category_name.toLowerCase() === category.toLowerCase()
             );
-            const standardRate = refCat ? `$${refCat.standard_rate.toFixed(2)}/hr` : 'Variable / Custom';
+            const standardRate =
+              refCat && refCat.standard_rate !== null ? `$${refCat.standard_rate.toFixed(2)}/hr` : 'Variable / Custom';
             const isSelected = selectedRoleFilter.toLowerCase() === category.toLowerCase();
 
             return (

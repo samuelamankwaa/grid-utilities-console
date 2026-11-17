@@ -148,10 +148,12 @@ export const ExpenseOverrideSchema = z.object({
 export const LaborRateCategorySchema = z.object({
   id: z.string().optional(),
   category_name: z.string().min(1),
-  standard_rate: z.number(),
-  ot_rate: z.number().optional(),
-  dt_rate: z.number().optional(),
-  benefits_rate: z.number().optional(),
+  // null = position-only role with no published rate card yet: selectable in the
+  // Add Position modal, but never used to guess a role from a timesheet rate.
+  standard_rate: z.number().nullable(),
+  ot_rate: z.number().nullable().optional(),
+  dt_rate: z.number().nullable().optional(),
+  benefits_rate: z.number().nullable().optional(),
   match_tolerance: z.number().default(0.20),
 });
 
