@@ -137,14 +137,13 @@ SET standard_rate = EXCLUDED.standard_rate,
 INSERT INTO public.labor_rate_categories (category_name, standard_rate, ot_rate, dt_rate, benefits_rate, match_tolerance)
 VALUES
     ('Superintendent', NULL, NULL, NULL, NULL, 0.20),
-    ('Operator', NULL, NULL, NULL, NULL, 0.20),
-    ('Trench Digger', NULL, NULL, NULL, NULL, 0.20),
+    ('Operator', NULL, NULL, NULL, 15.48, 0.20),
+    ('Trench Digger', NULL, NULL, NULL, 14.66, 0.20),
     ('Apprentice 1st Period', NULL, NULL, NULL, NULL, 0.20),
     ('Apprentice- 5th Period', NULL, NULL, NULL, NULL, 0.20),
     ('Apprentice- 7th Period', NULL, NULL, NULL, NULL, 0.20),
     ('Groundman- 1st Year', NULL, NULL, NULL, NULL, 0.20),
-    ('Groundman- Thereafter', NULL, NULL, NULL, NULL, 0.20),
-    ('Administrative Operations', NULL, NULL, NULL, NULL, 0.20)
+    ('Groundman- Thereafter', NULL, NULL, NULL, NULL, 0.20)
 ON CONFLICT (category_name) DO NOTHING;
 
 -- ==============================================================================

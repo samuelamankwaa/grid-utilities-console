@@ -53,7 +53,10 @@ export const EmployeePositionModal: React.FC<EmployeePositionModalProps> = ({ on
   const { ctx, getBreakdown } = useLaborCost();
 
   const canManage = currentUser?.role === 'Supervisor' || currentUser?.role === 'Admin';
-  const roleNames = useMemo(() => laborRateCategories.map((c) => c.category_name), [laborRateCategories]);
+  const roleNames = useMemo(
+    () => laborRateCategories.map((c) => c.category_name).filter((name) => name !== 'Administrative Operations'),
+    [laborRateCategories],
+  );
 
   // Unique employees, grouped by normalized identity key (see normalizeEmployeeKey).
   const employees = useMemo<EmployeeOption[]>(() => {
@@ -154,7 +157,7 @@ export const EmployeePositionModal: React.FC<EmployeePositionModalProps> = ({ on
 
   // Validation
   const employeeError = selected ? '' : 'Select an employee.';
-  const roleError = !roleCategory ? 'Select a position.' : !roleNames.includes(roleCategory) ? 'Unknown position.' : '';
+  const roleError = !roleCategory ? 'Select a position.' : !roleNames.includes(roleCategory) ? 'Select an available position.' : '';
   const rateError = validateHourlyRateInput(rateInput);
   const rateValue = rateError ? null : parseFloat(parseFloat(rateInput).toFixed(2));
   const isValid = !employeeError && !roleError && !rateError;
@@ -396,6 +399,9 @@ export const EmployeePositionModal: React.FC<EmployeePositionModalProps> = ({ on
               <option value="" disabled>
                 Select a position
               </option>
+              {roleCategory === 'Administrative Operations' && (
+                <option value={roleCategory} disabled>Administrative Operations (retired)</option>
+              )}
               {roleNames.map((name) => (
                 <option key={name} value={name}>
                   {name}
