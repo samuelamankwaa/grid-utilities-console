@@ -13,14 +13,13 @@ export const DEFAULT_LABOR_RATE_CATEGORIES: LaborRateCategory[] = [
   // entered per employee there. Not used for rate-based role detection. Benefits are $0
   // until a benefits_rate is set. Keep in sync with labor_rate_categories in the database.
   { category_name: 'Superintendent', standard_rate: null, ot_rate: null, dt_rate: null, benefits_rate: null, match_tolerance: 0.20 },
-  { category_name: 'Operator', standard_rate: null, ot_rate: null, dt_rate: null, benefits_rate: null, match_tolerance: 0.20 },
-  { category_name: 'Trench Digger', standard_rate: null, ot_rate: null, dt_rate: null, benefits_rate: null, match_tolerance: 0.20 },
+  { category_name: 'Operator', standard_rate: null, ot_rate: null, dt_rate: null, benefits_rate: 15.48, match_tolerance: 0.20 },
+  { category_name: 'Trench Digger', standard_rate: null, ot_rate: null, dt_rate: null, benefits_rate: 14.66, match_tolerance: 0.20 },
   { category_name: 'Apprentice 1st Period', standard_rate: null, ot_rate: null, dt_rate: null, benefits_rate: null, match_tolerance: 0.20 },
   { category_name: 'Apprentice- 5th Period', standard_rate: null, ot_rate: null, dt_rate: null, benefits_rate: null, match_tolerance: 0.20 },
   { category_name: 'Apprentice- 7th Period', standard_rate: null, ot_rate: null, dt_rate: null, benefits_rate: null, match_tolerance: 0.20 },
   { category_name: 'Groundman- 1st Year', standard_rate: null, ot_rate: null, dt_rate: null, benefits_rate: null, match_tolerance: 0.20 },
   { category_name: 'Groundman- Thereafter', standard_rate: null, ot_rate: null, dt_rate: null, benefits_rate: null, match_tolerance: 0.20 },
-  { category_name: 'Administrative Operations', standard_rate: null, ot_rate: null, dt_rate: null, benefits_rate: null, match_tolerance: 0.20 },
 ];
 
 // Helper to format currency

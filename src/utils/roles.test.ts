@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { classifyLaborRole, DEFAULT_LABOR_RATE_CATEGORIES } from './helpers';
+import { classifyLaborRole, DEFAULT_LABOR_RATE_CATEGORIES, getLaborRoleBenefitsRate } from './helpers';
 import { buildLaborCalcContext, computeLaborEntryCost, normalizeEmployeeKey } from './laborCost';
 import { getRoleDisplayName } from '../components/Timesheet/timesheetHelpers';
 import type { LaborEntry } from '../types/schemas';
@@ -13,14 +13,19 @@ const NEW_ROLES = [
   'Apprentice- 7th Period',
   'Groundman- 1st Year',
   'Groundman- Thereafter',
-  'Administrative Operations',
 ];
 
 describe('position-only roles', () => {
   it('are available as role categories, with no duplicate names', () => {
     const names = DEFAULT_LABOR_RATE_CATEGORIES.map((c) => c.category_name);
     NEW_ROLES.forEach((r) => expect(names).toContain(r));
+    expect(names).not.toContain('Administrative Operations');
     expect(new Set(names).size).toBe(names.length);
+  });
+
+  it('uses the requested hourly benefit rates', () => {
+    expect(getLaborRoleBenefitsRate('Operator')).toBe(15.48);
+    expect(getLaborRoleBenefitsRate('Trench Digger')).toBe(getLaborRoleBenefitsRate('Groundman'));
   });
 
   it('are never guessed from a timesheet rate', () => {
