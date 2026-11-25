@@ -101,7 +101,7 @@ const fetchAllRowsWithError = async (table: string): Promise<{ rows: any[]; erro
   for (;;) {
     const from = page * pageSize;
     const to = from + pageSize - 1;
-    const { data, error } = await supabase.from(table).select('*').range(from, to);
+    const { data, error } = await supabase.from(table).select('*').order('id').range(from, to);
     if (error) return { rows: allRows, error: error.message };
     if (!data || data.length === 0) break;
     allRows = allRows.concat(data);
@@ -126,23 +126,6 @@ export const buildEmployeePositionMap = (rows: unknown[]): EmployeePositionMap =
     }
   });
   return map;
-};
-
-// Helper to generate compliant RFC4122 v4 UUIDs for PostgreSQL UUID columns
-export const generateUUID = (): string => {
-  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
-    return crypto.randomUUID();
-  }
-  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
-    const r = (Math.random() * 16) | 0;
-    const v = c === 'x' ? r : (r & 0x3) | 0x8;
-    return v.toString(16);
-  });
-};
-
-const isValidUUID = (id?: string | null): boolean => {
-  if (!id) return false;
-  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(id);
 };
 
 // Upsert items in safe batches of 500 to prevent payload limits
@@ -413,10 +396,7 @@ export const uploadTimesheetThunk = createAsyncThunk(
       const benefitsCost = source.benefitsCost;
       const lineLaborCost = source.totalCost;
 
-      const entryId = isValidUUID(e.id) ? e.id! : generateUUID();
-
       return {
-        id: entryId,
         work_order_number: String(e.work_order_number).trim(),
         employee_name: e.employee_name,
         shift_date: e.shift_date,
@@ -437,22 +417,24 @@ export const uploadTimesheetThunk = createAsyncThunk(
       };
     });
 
-    try {
-      await upsertInChunks('connecteam_labor_entries', formatted, 'id');
-    } catch (e: any) {
-      console.warn('Supabase connecteam_labor_entries upsert warning, attempting legacy payload fallback:', e);
-      try {
-        const legacyFormatted = formatted.map(({ dt_hours: _dt_hours, dt_cost: _dt_cost, benefits_cost: _benefits_cost, benefits_rate: _benefits_rate, start_date: _start_date, end_date: _end_date, ...rest }) => rest);
-        await upsertInChunks('connecteam_labor_entries', legacyFormatted, 'id');
-      } catch (fallbackErr) {
-        console.error('Supabase connecteam_labor_entries upsert error:', fallbackErr);
-        throw fallbackErr;
-      }
+    const storedRows: LaborEntry[] = [];
+    const chunkSize = 500;
+    for (let offset = 0; offset < formatted.length; offset += chunkSize) {
+      const { data, error } = await supabase.rpc('import_connecteam_labor_entries', {
+        entries: formatted.slice(offset, offset + chunkSize),
+      });
+      if (error) throw new Error(`Could not import timesheets: ${error.message}`);
+      storedRows.push(...data);
     }
 
-    return formatted;
+    return deduplicateByKey(storedRows, (entry) => entry.id!);
   }
 );
+
+export const clearUploadedDatasetsThunk = createAsyncThunk('db/clearUploadedDatasets', async () => {
+  const { error } = await supabase.rpc('clear_uploaded_datasets');
+  if (error) throw new Error(`Could not clear uploaded data: ${error.message}`);
+});
 
 export const uploadJoinedMasterThunk = createAsyncThunk('db/uploadJoinedMaster', async (masterRows: any[]) => {
   const workOrdersToUpload = masterRows.map((row) => formatWorkOrderForUpload(row));
@@ -575,6 +557,12 @@ export const dbSlice = createSlice({
       .addCase(fetchDbState.rejected, (state) => {
         state.status = 'failed';
       })
+      .addCase(clearUploadedDatasetsThunk.fulfilled, (state) => {
+        state.workOrders = [];
+        state.invoices = [];
+        state.laborEntries = [];
+        state.reconciliationSummary = null;
+      })
       .addCase(uploadWorkOrdersThunk.fulfilled, (state, action) => {
         const affected: string[] = [];
         action.payload.forEach((item: any) => {
@@ -615,13 +603,13 @@ export const dbSlice = createSlice({
         );
       })
       .addCase(uploadTimesheetThunk.fulfilled, (state, action) => {
-        const affected: string[] = [];
-        action.payload.forEach((entry: LaborEntry) => {
-          affected.push(entry.work_order_number);
-          state.laborEntries.unshift(entry);
-        });
+        const uploadedIds = new Set(action.payload.map((entry) => entry.id));
+        state.laborEntries = [
+          ...action.payload,
+          ...state.laborEntries.filter((entry) => !uploadedIds.has(entry.id)),
+        ];
         state.reconciliationSummary = calculateReconciliation(
-          affected,
+          action.payload.map((entry) => entry.work_order_number),
           state.invoices,
           state.laborEntries,
           'timesheet',

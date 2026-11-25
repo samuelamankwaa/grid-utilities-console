@@ -14,7 +14,7 @@ import {
   uploadTimesheetThunk,
 } from '../store/dbSlice';
 import { useDispatch, useSelector } from 'react-redux';
-import { RootState } from '../store/store';
+import type { AppDispatch, RootState } from '../store/store';
 import { parseHoursToDecimal, parseExcelDate, classifyLaborRole, getLaborRoleBenefitsRate, DEFAULT_LABOR_RATE_CATEGORIES } from '../utils/helpers';
 import { X, UploadCloud, AlertCircle, FileText, CheckCircle, Clock, ArrowRight, UserCog } from 'lucide-react';
 import { getEmployeePositionOverride, normalizeEmployeeKey } from '../utils/laborCost';
@@ -118,22 +118,24 @@ const TIMESHEET_HEADER_MAP: Record<string, string> = {
 };
 
 export const UploadModal: React.FC<UploadModalProps> = ({ onClose }) => {
-  const dispatch = useDispatch();
+  const dispatch = useDispatch<AppDispatch>();
   const { workOrders, laborRateCategories, reconciliationSummary, employeePositions } = useSelector((state: RootState) => state.db);
   // Uploaded rows whose employee has a saved position assignment (applied at calculation time).
   const [assignedRowsInfo, setAssignedRowsInfo] = useState<{ rows: number; employees: number } | null>(null);
   const [uploadType, setUploadType] = useState<'work_orders' | 'invoices' | 'timesheet' | 'master'>('work_orders');
   const [errorList, setErrorList] = useState<{ row: number; field: string; message: string }[]>([]);
+  const [isUploading, setIsUploading] = useState(false);
   const [progress, setProgress] = useState<{ current: number; total: number } | null>(null);
-  const [successCount, setSuccessCount] = useState<number | null>(null);
+  const [successMessage, setSuccessMessage] = useState<string | null>(null);
 
   const onDrop = async (acceptedFiles: File[]) => {
     const file = acceptedFiles[0];
-    if (!file) return;
+    if (!file || isUploading) return;
 
+    setIsUploading(true);
     setErrorList([]);
     setProgress(null);
-    setSuccessCount(null);
+    setSuccessMessage(null);
     setAssignedRowsInfo(null);
 
     try {
@@ -355,9 +357,12 @@ export const UploadModal: React.FC<UploadModalProps> = ({ onClose }) => {
           const parsedStartDate = parseExcelDate(rawStartDate) || (rawStartDate ? String(rawStartDate).trim() : null);
           const parsedEndDate = parseExcelDate(rawEndDate) || (rawEndDate ? String(rawEndDate).trim() : null);
 
-          const fallbackDate = new Date().toISOString().split('T')[0];
-          const finalStartDate = parsedStartDate || parsedEndDate || fallbackDate;
-          const finalEndDate = parsedEndDate || parsedStartDate || fallbackDate;
+          const finalStartDate = parsedStartDate || parsedEndDate;
+          const finalEndDate = parsedEndDate || parsedStartDate;
+          if (!finalStartDate) {
+            errors.push({ row: idx + 1, field: 'shift_date', message: 'A shift date is required.' });
+            return;
+          }
 
           normalizedRow['work_order_number'] = String(rawWo).trim();
           normalizedRow['employee_name'] = fullName;
@@ -400,22 +405,23 @@ export const UploadModal: React.FC<UploadModalProps> = ({ onClose }) => {
         setErrorList(errors);
       } else {
         if (uploadType === 'work_orders') {
-          await dispatch(uploadWorkOrdersThunk(validRows) as any).unwrap();
+          await dispatch(uploadWorkOrdersThunk(validRows)).unwrap();
         } else if (uploadType === 'invoices') {
-          await dispatch(uploadInvoicesThunk(validRows) as any).unwrap();
+          await dispatch(uploadInvoicesThunk(validRows)).unwrap();
         } else if (uploadType === 'timesheet') {
-          await dispatch(uploadTimesheetThunk(validRows) as any).unwrap();
-          const assigned = validRows.filter((r) => getEmployeePositionOverride(r.employee_name, employeePositions));
+          const storedRows = await dispatch(uploadTimesheetThunk(validRows)).unwrap();
+          const assigned = storedRows.filter((r) => getEmployeePositionOverride(r.employee_name, employeePositions));
           if (assigned.length > 0) {
             setAssignedRowsInfo({
               rows: assigned.length,
               employees: new Set(assigned.map((r) => normalizeEmployeeKey(r.employee_name))).size,
             });
           }
+          setSuccessMessage(storedRows.length + ' unique timesheet rows verified in the database.');
         } else {
-          await dispatch(uploadJoinedMasterThunk(validRows) as any).unwrap();
+          await dispatch(uploadJoinedMasterThunk(validRows)).unwrap();
         }
-        setSuccessCount(validRows.length);
+        if (uploadType !== 'timesheet') setSuccessMessage('Successfully parsed and saved ' + validRows.length + ' rows.');
       }
     } catch (err: any) {
       setErrorList([
@@ -426,12 +432,14 @@ export const UploadModal: React.FC<UploadModalProps> = ({ onClose }) => {
         },
       ]);
     } finally {
+      setIsUploading(false);
       setProgress(null);
     }
   };
 
   const { getRootProps, getInputProps, isDragActive } = useDropzone({
     onDrop,
+    disabled: isUploading,
     accept: { 'text/csv': ['.csv'] },
     multiple: false,
   });
@@ -446,7 +454,9 @@ export const UploadModal: React.FC<UploadModalProps> = ({ onClose }) => {
           ),
           React.createElement('button', {
             onClick: onClose,
-            className: 'text-slate-400 hover:text-slate-600 p-1.5 rounded-xl hover:bg-slate-100 transition-colors'
+            disabled: isUploading,
+            'aria-label': 'Close',
+            className: 'text-slate-400 hover:text-slate-600 p-1.5 rounded-xl hover:bg-slate-100 transition-colors disabled:opacity-50'
           },
             React.createElement(X, { className: 'w-5 h-5' })
           )
@@ -455,16 +465,19 @@ export const UploadModal: React.FC<UploadModalProps> = ({ onClose }) => {
           React.createElement('div', { className: 'grid grid-cols-4 gap-2' },
             React.createElement('button', {
               onClick: () => setUploadType('work_orders'),
+              disabled: isUploading,
               className: 'py-2 px-3 rounded-xl border text-xs font-semibold cursor-pointer transition-all ' +
                 (uploadType === 'work_orders' ? 'bg-blue-50 border-blue-300 text-blue-700 shadow-sm font-bold' : 'bg-white border-slate-200 text-slate-600 hover:bg-slate-50')
             }, 'Work Orders'),
             React.createElement('button', {
               onClick: () => setUploadType('invoices'),
+              disabled: isUploading,
               className: 'py-2 px-3 rounded-xl border text-xs font-semibold cursor-pointer transition-all ' +
                 (uploadType === 'invoices' ? 'bg-blue-50 border-blue-300 text-blue-700 shadow-sm font-bold' : 'bg-white border-slate-200 text-slate-600 hover:bg-slate-50')
             }, 'Invoices'),
             React.createElement('button', {
               onClick: () => setUploadType('timesheet'),
+              disabled: isUploading,
               className: 'py-2 px-3 rounded-xl border text-xs font-semibold cursor-pointer transition-all ' +
                 (uploadType === 'timesheet' ? 'bg-purple-50 border-purple-300 text-purple-700 shadow-sm font-bold' : 'bg-white border-slate-200 text-slate-600 hover:bg-slate-50')
             },
@@ -475,6 +488,7 @@ export const UploadModal: React.FC<UploadModalProps> = ({ onClose }) => {
             ),
             React.createElement('button', {
               onClick: () => setUploadType('master'),
+              disabled: isUploading,
               className: 'py-2 px-3 rounded-xl border text-xs font-semibold cursor-pointer transition-all ' +
                 (uploadType === 'master' ? 'bg-blue-50 border-blue-300 text-blue-700 shadow-sm font-bold' : 'bg-white border-slate-200 text-slate-600 hover:bg-slate-50')
             }, 'Master Joined')
@@ -493,10 +507,10 @@ export const UploadModal: React.FC<UploadModalProps> = ({ onClose }) => {
             React.createElement('span', { className: 'animate-pulse' }, 'Processing...'),
             React.createElement('span', null, progress.current + ' / ' + progress.total + ' rows completed')
           ),
-          successCount !== null && React.createElement('div', { className: 'space-y-3' },
+          successMessage && React.createElement('div', { className: 'space-y-3' },
             React.createElement('div', { className: 'flex items-center gap-2.5 p-3.5 bg-green-50 rounded-xl border border-green-100 text-green-800 text-xs font-medium' },
               React.createElement(CheckCircle, { className: 'w-4 h-4 text-green-600 shrink-0' }),
-              React.createElement('span', null, 'Successfully parsed and saved ' + successCount + ' rows.')
+              React.createElement('span', null, successMessage)
             ),
             assignedRowsInfo && React.createElement('div', { className: 'flex items-center gap-2.5 p-3.5 bg-amber-50 rounded-xl border border-amber-200 text-amber-900 text-xs font-medium' },
               React.createElement(UserCog, { className: 'w-4 h-4 text-amber-600 shrink-0' }),

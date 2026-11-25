@@ -37,6 +37,10 @@ npm run dev
 npm run build
 ```
 
+### 4. Database Setup
+
+For a new Supabase database, run [the base schema](./supabase_schema.sql) first. Before deploying the updated console to any environment, apply [the dataset actions migration](./migrations/2026-11-25_dataset_actions.sql). Back up existing labor entries before running it. The migration keeps the latest row for each matching set of shift details and pay inputs, then enforces uniqueness for later imports.
+
 ---
 
 ## 🛠️ Tech Stack

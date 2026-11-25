@@ -5,11 +5,13 @@ import { configureStore } from '@reduxjs/toolkit';
 // whatever result the test configures.
 const mock = vi.hoisted(() => ({
   calls: [] as { table: string; payload: unknown; options: unknown }[],
+  rpc: vi.fn(),
   result: { data: null as unknown, error: null as null | { message: string } },
 }));
 
 vi.mock('../utils/supabaseClient', () => ({
   supabase: {
+    rpc: mock.rpc,
     from: (table: string) => ({
       upsert: (payload: unknown, options: unknown) => {
         mock.calls.push({ table, payload, options });
@@ -22,7 +24,7 @@ vi.mock('../utils/supabaseClient', () => ({
   },
 }));
 
-import dbReducer, { saveEmployeePositionThunk, uploadTimesheetThunk } from './dbSlice';
+import dbReducer, { clearUploadedDatasetsThunk, saveEmployeePositionThunk, uploadTimesheetThunk } from './dbSlice';
 import authReducer from './authSlice';
 import filtersReducer from './filtersSlice';
 import { selectLaborCalcContext } from './selectors';
@@ -59,6 +61,7 @@ const savedRow = (name: string, role: string, rate: number) => ({
 
 beforeEach(() => {
   mock.calls.length = 0;
+  mock.rpc.mockReset();
   mock.result = { data: null, error: null };
 });
 
@@ -139,7 +142,6 @@ describe('Scenario E: timesheet upload with a saved assignment', () => {
     mock.result = { data: savedRow('John Smith', 'General Foreman', 65), error: null };
     await store.dispatch(saveEmployeePositionThunk({ employeeName: 'John Smith', roleCategory: 'General Foreman', hourlyRate: 65 }));
 
-    mock.result = { data: null, error: null };
     const uploaded = {
       work_order_number: '100',
       employee_name: 'John Smith',
@@ -155,9 +157,14 @@ describe('Scenario E: timesheet upload with a saved assignment', () => {
       line_labor_cost: 0,
       role_category: 'Journeyman',
     } as LaborEntry;
-    await store.dispatch(uploadTimesheetThunk([uploaded]));
+    mock.rpc.mockImplementation(async (_name, { entries }) => ({
+      data: entries.map((entry: LaborEntry) => ({ ...entry, id: 'stored-shift-id' })),
+      error: null,
+    }));
 
-    const persisted = mock.calls.find((c) => c.table === 'connecteam_labor_entries')!.payload as Record<string, number | string>[];
+    await store.dispatch(uploadTimesheetThunk([uploaded])).unwrap();
+    const [rpcName, { entries: persisted }] = mock.rpc.mock.calls[0];
+    expect(rpcName).toBe('import_connecteam_labor_entries');
     expect(persisted[0].hourly_rate).toBe(53.72); // source rate kept for audit
     expect(persisted[0].line_labor_cost).toBe(829.82); // source cost: 429.76 + 161.16 + 238.90
 
@@ -165,5 +172,32 @@ describe('Scenario E: timesheet upload with a saved assignment', () => {
     const effective = computeLaborEntryCost(stored, selectLaborCalcContext(store.getState()));
     expect(effective.role).toBe('General Foreman');
     expect(effective.totalCost).toBe(967.2);
+
+    await store.dispatch(uploadTimesheetThunk([uploaded])).unwrap();
+    const { laborEntries } = store.getState().db;
+    expect(laborEntries).toHaveLength(1);
+    expect(computeLaborEntryCost(laborEntries[0], selectLaborCalcContext(store.getState())).totalCost).toBe(967.2);
+  });
+});
+
+describe('clearUploadedDatasetsThunk', () => {
+  it('clears uploaded records only after the database confirms and keeps employee settings', async () => {
+    const store = makeStore('Admin');
+    const shift = { id: 'stored-shift-id', work_order_number: '100', employee_name: 'John Smith' };
+    mock.result = { data: savedRow('John Smith', 'General Foreman', 65), error: null };
+    await store.dispatch(saveEmployeePositionThunk({ employeeName: 'John Smith', roleCategory: 'General Foreman', hourlyRate: 65 })).unwrap();
+    store.dispatch(uploadTimesheetThunk.fulfilled([shift as LaborEntry], 'upload', []));
+
+    mock.rpc.mockResolvedValueOnce({ error: { message: 'Permission denied' } });
+    await expect(store.dispatch(clearUploadedDatasetsThunk()).unwrap()).rejects.toThrow('Permission denied');
+    expect(store.getState().db.laborEntries).toEqual([shift]);
+
+    mock.rpc.mockResolvedValueOnce({ error: null });
+    await store.dispatch(clearUploadedDatasetsThunk()).unwrap();
+    expect(mock.rpc).toHaveBeenLastCalledWith('clear_uploaded_datasets');
+    expect(store.getState().db).toMatchObject({
+      workOrders: [], invoices: [], laborEntries: [], reconciliationSummary: null,
+      employeePositions: { 'john smith': { hourly_rate: 65 } },
+    });
   });
 });
