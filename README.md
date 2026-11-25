@@ -41,6 +41,8 @@ npm run build
 
 For a new Supabase database, run [the base schema](./supabase_schema.sql) first. Before deploying the updated console to any environment, apply [the dataset actions migration](./migrations/2026-11-25_dataset_actions.sql). Back up existing labor entries before running it. The migration keeps the latest row for each matching set of shift details and pay inputs, then enforces uniqueness for later imports.
 
+After the dataset actions migration, apply [the clear data fix](./migrations/2026-11-25_fix_clear_uploaded_datasets.sql). It updates the clear function for databases that require a WHERE clause on every DELETE.
+
 ---
 
 ## 🛠️ Tech Stack
