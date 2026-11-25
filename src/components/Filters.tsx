@@ -1,9 +1,10 @@
 import React, { useState, useMemo, useRef, useEffect } from 'react';
 import { useSelector, useDispatch } from 'react-redux';
 import { RootState } from '../store/store';
-import { setFilters, resetFilters } from '../store/filtersSlice';
-import { RotateCcw, ChevronDown, RefreshCw, Sparkles, X, Search, Hash } from 'lucide-react';
+import { setFilters } from '../store/filtersSlice';
+import { Settings2, ChevronDown, RefreshCw, Sparkles, X, Search, Hash } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
+import { DatasetActionsModal } from './DatasetActionsModal';
 
 export const Filters: React.FC = () => {
   const dispatch = useDispatch();
@@ -11,6 +12,7 @@ export const Filters: React.FC = () => {
   const { workOrders, invoices, laborEntries } = useSelector((state: RootState) => state.db);
   const [isOpen, setIsOpen] = useState(false);
   const [isWoOpen, setIsWoOpen] = useState(false);
+  const [showDatasetActions, setShowDatasetActions] = useState(false);
   const [woSearchQuery, setWoSearchQuery] = useState('');
   const dropdownRef = useRef<HTMLDivElement>(null);
   const woDropdownRef = useRef<HTMLDivElement>(null);
@@ -364,7 +366,7 @@ export const Filters: React.FC = () => {
         </select>
       </div> */}
 
-      {/* Action Buttons: Sync (Left) and Reset */}
+      {/* Sync and data actions */}
       <div className="ml-auto flex items-center gap-2.5 relative">
         {/* Sync Button */}
         <div className="relative">
@@ -416,16 +418,17 @@ export const Filters: React.FC = () => {
           </AnimatePresence>
         </div>
 
-        {/* Reset Button */}
         <button
           type="button"
-          onClick={() => dispatch(resetFilters())}
+          aria-haspopup="dialog"
+          onClick={() => setShowDatasetActions(true)}
           className="flex items-center gap-1.5 px-3 py-1.5 bg-white hover:bg-slate-100 active:bg-slate-200 text-slate-700 text-sm font-semibold border border-slate-300 rounded-md shadow-sm cursor-pointer select-none transition-all duration-150"
         >
-          <RotateCcw className="w-4 h-4 text-slate-500" />
-          <span>Reset</span>
+          <Settings2 className="w-4 h-4 text-slate-500" />
+          <span>Data Actions</span>
         </button>
       </div>
+      {showDatasetActions && <DatasetActionsModal onClose={() => setShowDatasetActions(false)} />}
     </div>
   );
 };
